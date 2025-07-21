@@ -1,6 +1,4 @@
-packages_to_load <- c("tidyverse", "glmTMB", "emmeans") # create vector of R package names that we know are needed in the rest of the code
-
-#"amt", "basemaps", "CropScapeR", "dplyr", "geodata", "ggmap", "ggplot2", "sf", "terra", "tidyterra", "tidyverse", "tigris", "tmap", "fasterize", "ctmm", "purrr", "glmmTMB", "metafor", "car", "raster", "ggpubr"
+packages_to_load <- c("tidyverse", "glmmTMB", "emmeans", "ggplot2", "sf", "terra") # create vector of R package names that we know are needed in the rest of the code
 
 
 ## ----load_libraries----
@@ -91,5 +89,69 @@ ggplot(emm_df, aes(x = esc_type, y = rate, fill = esc_type)) +
 
 #write.csv(eshep_full_df, file = "C:/Users/spsch/Documents/R/Virtual_Fence/eshep_full_df.csv")
 
+
+
+#----Read in and clean data-------
 eshep_full_df <- read.csv(file = "C:/Users/spsch/Documents/R/Virtual_Fence/eshep_full_df.csv")
+
+exclusion_zones <- st_read(dsn = "C:/Users/spsch/Documents/R/Virtual_Fence/Exclusion_Zones.kml")
+
+training_VPs <- st_read(dsn = "C:/Users/spsch/Documents/R/Virtual_Fence/Training VPs.kml")
+
+
+
+exclusion_zones$Description <- c("west", "east", "east", "east", "east", "east",
+                                 "east", "west", "west", "west", "west", "west")
+
+eshep_full_df_noNA <- eshep_full_df %>%
+  na.omit(latitude) %>%
+  na.omit(longitude)
+
+# Convert df to spatial points object
+eshep_full_sf <- st_as_sf(eshep_full_df_noNA, coords = c("longitude", "latitude"), crs = crs(training_VPs))
+
+# Add columns based on whether points occur within polygons of interest
+training1_inside <- st_within(eshep_full_sf, training_VPs[1, ], sparse = FALSE)[ , 1]
+training2_inside <- st_within(eshep_full_sf, training_VPs[2, ], sparse = FALSE)[ , 1]
+training3_inside <- st_within(eshep_full_sf, training_VPs[3, ], sparse = FALSE)[ , 1]
+west_ex_inside <- st_within(eshep_full_sf,
+                            filter(exclusion_zones, Description == "west"),
+                                   sparse = FALSE)[ , 1]
+east_ex_inside <- st_within(eshep_full_sf,
+                            filter(exclusion_zones, Description == "east"),
+                            sparse = FALSE)[ , 1]
+
+
+# Categorize points by experiment period
+eshep_full_sf <- eshep_full_sf %>%
+  mutate(period = 
+           ifelse(Time..UTC. <= "2025-07-08 11:59:59", "Tr1",
+                  ifelse(Time..UTC. >= "2025-07-08 12:00:00" &
+                           Time..UTC. <= "2025-07-09 11:59:59", "Tr2",
+                         ifelse(Time..UTC. >= "2025-07-09 12:00:00" &
+                                  Time..UTC. <= "2025-07-10 11:59:59", "Tr3",
+                                ifelse(Time..UTC. >= "2025-07-10 12:00:00" &
+                                         Time..UTC. <= "2025-07-11 11:59:59", "E1",
+                                       ifelse(Time..UTC. >= "2025-07-11 12:00:00" &
+                                                Time..UTC. <= "2025-07-12 11:59:59", "W1",
+                                              ifelse(Time..UTC. >= "2025-07-12 12:00:00" &
+                                                       Time..UTC. <= "2025-07-13 11:59:59", "E2",
+                                                     ifelse(Time..UTC. >= "2025-07-13 12:00:00" &
+                                                              Time..UTC. <= "2025-07-14 12:00:00", "W2",
+                                                            NA))))))))
+
+
+# Match point occurrence to experiment period
+eshep_full_sf <- eshep_full_sf %>%
+  mutate(training1_inside = ifelse(period == "Tr1", training1_inside, NA)) %>%
+  mutate(training2_inside = ifelse(period == "Tr2", training2_inside, NA)) %>%
+  mutate(training3_inside = ifelse(period == "Tr3", training3_inside, NA)) %>%
+  mutate(west_ex_inside = ifelse(period %in% c("W1", "W2"), west_ex_inside, NA)) %>%
+  mutate(east_ex_inside = ifelse(period %in% c("E1", "E2"), east_ex_inside, NA))
+
+
+
+
+View(head(eshep_full_sf, 100))
+
 
