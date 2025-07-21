@@ -1,0 +1,13 @@
+group,esc_type,total_esc,group_n,animal_days
+1,Virtual,0,4,28
+2,Virtual,0,5,35
+3,Virtual,2,4,28
+4,Virtual,0,5,35
+5,Virtual,0,5,35
+6,Virtual,0,4,28
+1,Electric,0,4,28
+2,Electric,0,5,35
+3,Electric,2,4,28
+4,Electric,22,5,35
+5,Electric,2,5,35
+6,Electric,0,4,28
