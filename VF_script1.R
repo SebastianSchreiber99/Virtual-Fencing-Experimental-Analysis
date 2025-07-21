@@ -149,9 +149,68 @@ eshep_full_sf <- eshep_full_sf %>%
   mutate(west_ex_inside = ifelse(period %in% c("W1", "W2"), west_ex_inside, NA)) %>%
   mutate(east_ex_inside = ifelse(period %in% c("E1", "E2"), east_ex_inside, NA))
 
+eshep_full_sf <- eshep_full_sf %>%
+  mutate(
+    inside_VF = case_when(
+      period == "Tr1" ~ training1_inside,
+      period == "Tr2" ~ training2_inside,
+      period == "Tr3" ~ training3_inside,
+      period %in% c("E1","E2") ~ !east_ex_inside,
+      period %in% c("W1","W2") ~ !west_ex_inside))
+
+
+# Calculate proportion of points inside VF for each animal and convert to df
+m2_df <- eshep_full_sf %>%
+  group_by(Animal_ID, TRT, Group, period) %>%
+  summarise(
+    n_pts = n(),
+    n_in = sum(inside_VF, na.rm = TRUE),
+    prop_in = n_in / n_pts,
+    .groups = "drop"
+  ) %>%
+  as.data.frame() %>%
+  select(!last_col())
+
+
+# Fit binomial GLMM
+# Animal_ID random effect was removed because it caused model singularity. Random effect estiamte for animal_ID was 2.462e-34
+m2 <- glmmTMB(
+  cbind(n_in, n_pts - n_in) ~ TRT + (1|Group) + (1|period), 
+  family = binomial,
+  data = m2_df)
+
+summary(m2)
+
+
+# gives probability inside
+emm <- emmeans(m2, ~ TRT, type = "response")  
+print(emm)
 
 
 
-View(head(eshep_full_sf, 100))
+#-----Bar Plot-------
+emm_df <- as.data.frame(emm) %>%
+  mutate(
+    SE = SE,
+    ymin = asymp.LCL,
+    ymax = asymp.UCL
+  ) %>%
+  mutate(treatment = ifelse(TRT == "CNT", "Control", "Treatment"))
+
+ggplot(emm_df, aes(x = treatment, y = prob, fill = treatment)) +
+  geom_col(width = 0.6, color = "black") +
+  geom_errorbar(aes(ymin = ymin, ymax = ymax), width = 0.2) +
+  labs(
+    x = element_blank(),
+    y = "% Points Inside Virtual Boundary",
+    title = "Virtual Fence Efficacy by Treatment") +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  coord_cartesian(ylim = c(0.90, 1)) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(hjust = 0.5)) +
+  scale_fill_manual(values = c("darkorange", "lightgreen"))
+
 
 
