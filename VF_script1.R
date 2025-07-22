@@ -54,7 +54,7 @@ emm_df <- as.data.frame(emm) %>%
 
 
 # Plot
-ggplot(emm_df, aes(x = esc_type, y = rate, fill = esc_type)) +
+p1 <- ggplot(emm_df, aes(x = esc_type, y = rate, fill = esc_type)) +
   geom_col(width = 0.6, color = "black") +
   geom_errorbar(aes(ymin = ymin, ymax = ymax), width = 0.2) +
   labs(
@@ -68,7 +68,13 @@ ggplot(emm_df, aes(x = esc_type, y = rate, fill = esc_type)) +
         plot.title = element_text(hjust = 0.4))
 
 
-
+#ggsave(filename = "Escapes.png",
+#       plot = p1,
+#       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
+#       dpi = 300,
+#       width = 5,
+#       height = 5,
+#       units = "in")
 
 
 
@@ -91,7 +97,8 @@ ggplot(emm_df, aes(x = esc_type, y = rate, fill = esc_type)) +
 
 
 
-#----Read in and clean data-------
+
+#Read in and clean data
 eshep_full_df <- read.csv(file = "C:/Users/spsch/Documents/R/Virtual_Fence/eshep_full_df.csv")
 
 exclusion_zones <- st_read(dsn = "C:/Users/spsch/Documents/R/Virtual_Fence/Exclusion_Zones.kml")
@@ -183,12 +190,12 @@ summary(m2)
 
 
 # gives probability inside
-emm <- emmeans(m2, ~ TRT, type = "response")  
-print(emm)
+emm2 <- emmeans(m2, ~ TRT, type = "response")  
+print(emm2)
 
 
 
-#-----Bar Plot-------
+#-----Percent in - Bar Plot-------
 emm_df <- as.data.frame(emm) %>%
   mutate(
     SE = SE,
@@ -197,7 +204,7 @@ emm_df <- as.data.frame(emm) %>%
   ) %>%
   mutate(treatment = ifelse(TRT == "CNT", "Control", "Treatment"))
 
-ggplot(emm_df, aes(x = treatment, y = prob, fill = treatment)) +
+p2 <- ggplot(emm_df, aes(x = treatment, y = prob, fill = treatment)) +
   geom_col(width = 0.6, color = "black") +
   geom_errorbar(aes(ymin = ymin, ymax = ymax), width = 0.2) +
   labs(
@@ -211,6 +218,68 @@ ggplot(emm_df, aes(x = treatment, y = prob, fill = treatment)) +
     legend.position = "none",
     plot.title = element_text(hjust = 0.5)) +
   scale_fill_manual(values = c("darkorange", "lightgreen"))
+
+
+
+#ggsave(filename = "Efficacy.png",
+#       plot = p2,
+#       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
+#       dpi = 300,
+#       width = 5,
+#       height = 5,
+#       units = "in")
+
+
+
+#-----------------Rate of Learning-------------------------------
+
+# Remove any points with cues that are not near VF
+
+# Read in shapefile for buffer zones
+buffers <- st_read(dsn = "C:/Users/spsch/Documents/R/Virtual_Fence/Buffers.kml")
+
+# Only keep points associated with cues
+eshep_cues_sf <- eshep_full_sf %>%
+  filter(No..Audios >= 1 | No..Pulses >= 1)
+
+# Only keep points within buffer zones during phase 2
+eshep_buffer_ex <- eshep_cues_sf %>%
+  filter(period %in% c("E1", "E2", "W1", "W2"))
+
+eshep_buffer_ex <- st_intersection(eshep_buffer_ex, buffers)
+
+eshep_buffer_ex <- eshep_buffer_ex %>%
+  mutate(in_buffer = ifelse(Group == 1 & period %in% c("E1", "E2") & Name == "East_1_buffer", TRUE,
+                            ifelse(Group == 1 & period %in% c("W1", "W2") & Name == "West_1_buffer", TRUE,
+                                   ifelse(Group == 2 & period %in% c("E1", "E2") & Name == "East_2_buffer", TRUE,
+                                          ifelse(Group == 2 & period %in% c("W1", "W2") & Name == "West_2_buffer", TRUE,
+                                                 ifelse(Group == 3 & period %in% c("E1", "E2") & Name == "East_3_buffer", TRUE,
+                                                        ifelse(Group == 3 & period %in% c("W1", "W2") & Name == "West_3_buffer", TRUE,
+                                                               ifelse(Group == 4 & period %in% c("E1", "E2") & Name == "East_4_buffer", TRUE,
+                                                                      ifelse(Group == 4 & period %in% c("W1", "W2") & Name == "West_4_buffer", TRUE,
+                                                                             ifelse(Group == 5 & period %in% c("E1", "E2") & Name == "East_5_buffer", TRUE,
+                                                                                    ifelse(Group == 5 & period %in% c("W1", "W2") & Name == "West_5_buffer", TRUE,
+                                                                                           ifelse(Group == 6 & period %in% c("E1", "E2") & Name == "East_6_buffer", TRUE,
+                                                                                                  ifelse(Group == 6 & period %in% c("W1", "W2") & Name == "West_1_buffer", TRUE, FALSE)))))))))))))
+
+
+
+# Combine points from phases 1 and 2 and convert to simple df
+eshep_buffer1_2 <- eshep_buffer_ex %>%
+  filter(in_buffer == "TRUE") %>%
+  as.data.frame() %>%
+  select(Time..UTC., No..Audios, No..Pulses, Animal_ID, Group, TRT, period)
+
+eshep_buffer2_2 <- eshep_cues_sf %>%
+  filter(period %in% c("Tr1", "Tr2", "Tr3")) %>%
+  as.data.frame() %>%
+  select(Time..UTC., No..Audios, No..Pulses, Animal_ID, Group, TRT, period)
+
+eshep_buffer_final <- rbind.data.frame(eshep_buffer1_2,eshep_buffer2_2)
+
+
+
+
 
 
 
