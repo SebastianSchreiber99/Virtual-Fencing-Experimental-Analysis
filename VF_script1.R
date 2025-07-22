@@ -1,4 +1,4 @@
-packages_to_load <- c("tidyverse", "glmmTMB", "emmeans", "ggplot2", "sf", "terra") # create vector of R package names that we know are needed in the rest of the code
+packages_to_load <- c("tidyverse", "glmmTMB", "emmeans", "ggplot2", "sf", "terra", "lubridate", "lme4", "performance") # create vector of R package names that we know are needed in the rest of the code
 
 
 ## ----load_libraries----
@@ -231,7 +231,7 @@ p2 <- ggplot(emm_df, aes(x = treatment, y = prob, fill = treatment)) +
 
 
 
-#-----------------Rate of Learning-------------------------------
+#-----------------Rate of Learning by hour-------------------------------
 
 # Remove any points with cues that are not near VF
 
@@ -275,11 +275,151 @@ eshep_buffer2_2 <- eshep_cues_sf %>%
   as.data.frame() %>%
   select(Time..UTC., No..Audios, No..Pulses, Animal_ID, Group, TRT, period)
 
-eshep_buffer_final <- rbind.data.frame(eshep_buffer1_2,eshep_buffer2_2)
+eshep_cue_df_clean <- rbind.data.frame(eshep_buffer1_2,eshep_buffer2_2)
+
+
+# Compute 'hour' as hours since 12:00 PM (noon)
+eshep_cue_df_clean <- eshep_cue_df_clean %>%
+  mutate(
+    datetime = ymd_hms(`Time..UTC.`),
+    hour = hour(datetime) + minute(datetime) / 60 + second(datetime) / 3600,
+    hour = hour - 12,
+    hour = if_else(hour < 0, hour + 24, hour),
+    hour_bin = floor(hour)) # Shift A.M. hours forward
+
+
+hour_summary <- eshep_cue_df_clean %>%
+  group_by(Animal_ID, TRT, Group, period, hour_bin) %>%
+  summarise(
+    total_audios = sum(`No..Audios`, na.rm = TRUE),
+    total_pulses = sum(`No..Pulses`, na.rm = TRUE),
+    .groups = "drop") %>%
+  mutate(percent_audio = total_audios/(total_pulses+total_audios))
+
+
+# Based on Shapiro-Wilk W, and visual histogram analyses, the data is clearly non-normal and strongly skewed, which confirms that a Poisson GLMM is the right modeling approach.
+
+
+# Fit Poisson GLMM
+
+m3 <- glmmTMB(
+  total_audios ~ hour_bin * TRT + (1|Animal_ID) + (1|Group) + (1|period),
+  family = poisson,
+  data = hour_summary)
+
+summary(m3)
+
+
+
+m3.1 <- glmmTMB(
+  total_pulses ~ hour_bin * TRT + (1|Animal_ID) + (1|Group) + (1|period),
+  family = poisson,
+  data = hour_summary)
+
+summary(m3.1)
+
+
+m3.2 <- glmmTMB(
+  cbind(total_audios, total_pulses) ~ hour_bin * TRT + 
+    (1|Animal_ID) + (1|Group) + (1|period),
+  family = binomial,
+  data = hour_summary)
+
+summary(m3.2)
+
+
+
+# Model validation and over dispersion checks
+check_overdispersion(m3)
+check_overdispersion(m3.1)
+check_overdispersion(m3.2)
+
+res3 <- simulateResiduals(fittedModel = m3, n = 1000)
+plot(res3)
+testDispersion(res3)
+
+res3.1 <- simulateResiduals(fittedModel = m3.1, n = 1000)
+plot(res3.1)
+testDispersion(res3.1)
+
+res3.2 <- simulateResiduals(fittedModel = m3.2, n = 1000)
+plot(res3.2)
+testDispersion(res3.2)
+
+# Validation results:
+#m3 and m3.2 look solid. Their dispersion ratios are close to 1, and both performance::check_overdispersion() and DHARMa::testDispersion() agree: no overdispersion detected.
+#m3.1, however, shows strong underdispersion, which likely indicates: Data artifacts (e.g., very sparse response), or overfitting (too many fixed effects or unnecessary complexity).
+
+
+
+#-----------------Rate of Learning - Plots-------------------------------
+
+cue_summary <- hour_summary %>%
+  pivot_longer(
+    cols = c(total_audios, total_pulses),
+    names_to = "cue_type",
+    values_to = "count"
+  ) %>%
+  mutate(cue_type = recode(cue_type,
+                           total_audios = "Audio",
+                           total_pulses = "Pulse")) %>%
+  group_by(hour_bin, TRT, cue_type) %>%
+  summarise(total_cues = sum(count, na.rm = TRUE), .groups = "drop")
+
+
+# Plot of number of cues by hour
+p3 <- ggplot(cue_long, aes(x = hour_bin, y = total_cues,
+                              color = interaction(cue_type, TRT),
+                              group = interaction(cue_type, TRT))) +
+  geom_line(size = 1.2) +
+  geom_point(size = 2) +
+  labs(
+    title = "Cue Delivery Over Time by Treatment",
+    x = "Hour of Period",
+    y = "Total Cues",
+    color = "Cue Type × Treatment"
+  ) +
+  theme_minimal(base_size = 14) +
+  scale_x_continuous(breaks = unique(cue_long$hour_bin)) +
+  theme(
+    plot.title = element_text(hjust = 0.5))
+
+
+
+
+percent_audio_summary <- hour_summary %>%
+  group_by(hour_bin, TRT) %>%
+  summarise(
+    total_audios = sum(total_audios, na.rm = TRUE),
+    total_pulses = sum(total_pulses, na.rm = TRUE),
+    total_cues = total_audios + total_pulses,
+    percent_audio = total_audios / total_cues,
+    .groups = "drop"
+  )
+
+# Percent audio by hour
+ggplot(percent_audio_summary, aes(x = hour_bin, y = percent_audio, color = TRT, group = TRT)) +
+  geom_line(size = 1.2) +
+  geom_point(size = 2) +
+  labs(
+    title = "Proportion of Audio Cues Over Time by Treatment",
+    x = "Hour of Period",
+    y = "Percent Audio",
+    color = "Treatment"
+  ) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1), limits = c(0, 1)) +
+  scale_x_continuous(breaks = unique(percent_audio_summary$hour_bin)) +
+  theme_minimal(base_size = 14) +
+  theme(plot.title = element_text(hjust = 0.5))
 
 
 
 
 
+
+
+
+
+#-----------------Rate of Learning by period-------------------------------
 
 
