@@ -217,7 +217,7 @@ p2 <- ggplot(emm_df, aes(x = treatment, y = prob, fill = treatment)) +
   theme(
     legend.position = "none",
     plot.title = element_text(hjust = 0.5)) +
-  scale_fill_manual(values = c("darkorange", "lightgreen"))
+  scale_fill_manual(values = c("darkorange", "forestgreen"))
 
 
 
@@ -319,14 +319,25 @@ m3.1 <- glmmTMB(
 summary(m3.1)
 
 
+#Originally audio-shock ratio or the percentage of cues that were audio was modeled. But this is misleading because that percentage has a lower bound of 50%, since animals cannot receive an shock without an audio warning first. Thus, shocks are a subset of audio events, and a better framing of the question is: Given an audio, what’s the probability it was followed by a pulse?
+#To model the probability that an audio cue leads to a pulse — i.e., how often a cue escalates from an audio-only warning to an audio+shock correction.
+#This is best framed as a conditional probability:
+#Given that an audio was delivered, what’s the chance it was followed by a pulse?
+#This model uses a binomial response in the form cbind(successes, failures).
+#In this case: Successes = total_pulses: how many audios escalated to a pulse
+#Failures = total_audios - total_pulses: how many audios did not lead to a pulse
+#Total trials = total_audios
+#The audios are the "trials": they occur first and may or may not escalate.
+#The pulses are the "successes": they occur only if the audio was ineffective.
+#This model structure treats each hour (or bin) as an opportunity to observe that escalation rate.
+
 m3.2 <- glmmTMB(
-  cbind(total_audios, total_pulses) ~ hour_bin * TRT + 
+  cbind(total_pulses, total_audios - total_pulses) ~ hour_bin * TRT + 
     (1|Animal_ID) + (1|Group) + (1|period),
   family = binomial,
   data = hour_summary)
 
 summary(m3.2)
-
 
 
 # Model validation and over dispersion checks
@@ -364,55 +375,83 @@ cue_summary <- hour_summary %>%
                            total_audios = "Audio",
                            total_pulses = "Pulse")) %>%
   group_by(hour_bin, TRT, cue_type) %>%
-  summarise(total_cues = sum(count, na.rm = TRUE), .groups = "drop")
+  summarise(total_cues = sum(count, na.rm = TRUE), .groups = "drop")%>%
+  mutate(treatment = ifelse(TRT == "TRT", "Treatment", "Control"))
 
 
 # Plot of number of cues by hour
-p3 <- ggplot(cue_long, aes(x = hour_bin, y = total_cues,
-                              color = interaction(cue_type, TRT),
-                              group = interaction(cue_type, TRT))) +
-  geom_line(size = 1.2) +
+p3 <- ggplot(cue_summary, aes(x = hour_bin, y = total_cues,
+                     color = treatment,
+                     linetype = cue_type,
+                     group = interaction(cue_type, treatment))) +
   geom_point(size = 2) +
+  geom_smooth(method = "loess", se = FALSE, size = 1.2) +
   labs(
-    title = "Cue Delivery Over Time by Treatment",
+    title = "Smoothed Cues by Hour",
     x = "Hour of Period",
-    y = "Total Cues",
-    color = "Cue Type × Treatment"
+    y = "Cues per Hour",
+    color = "Treatment",
+    linetype = "Cue Type"
   ) +
+  scale_color_manual(values = c("Treatment" = "darkorange", "Control" = "forestgreen")) +
+  scale_linetype_manual(values = c("Audio" = "dotted", "Pulse" = "solid")) +
+  scale_x_continuous(breaks = c(0, 2, 4, 6, 8, 10, 12, 14, 16, 18)) +
   theme_minimal(base_size = 14) +
-  scale_x_continuous(breaks = unique(cue_long$hour_bin)) +
-  theme(
-    plot.title = element_text(hjust = 0.5))
+  theme(plot.title = element_text(hjust = 0.5),
+        legend.title = element_blank())
+
+
+#ggsave(filename = "Cues_by_hour.png",
+#       plot = p3,
+#       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
+#       dpi = 300,
+#       width = 6,
+#       height = 4,
+#       units = "in")
 
 
 
 
-percent_audio_summary <- hour_summary %>%
+
+escalation_summary <- hour_summary %>%
+  mutate(
+    prob_escalation = total_pulses / total_audios) %>%
   group_by(hour_bin, TRT) %>%
   summarise(
-    total_audios = sum(total_audios, na.rm = TRUE),
-    total_pulses = sum(total_pulses, na.rm = TRUE),
-    total_cues = total_audios + total_pulses,
-    percent_audio = total_audios / total_cues,
-    .groups = "drop"
-  )
+    mean_prob = mean(prob_escalation, na.rm = TRUE),
+    se = sd(prob_escalation, na.rm = TRUE) / sqrt(n()),
+    .groups = "drop") %>%
+  mutate(
+    ymin = pmax(0, mean_prob - se),
+    ymax = pmin(1, mean_prob + se)) %>%
+  mutate(treatment = ifelse(TRT == "TRT", "Treatment", "Control"))
 
-# Percent audio by hour
-ggplot(percent_audio_summary, aes(x = hour_bin, y = percent_audio, color = TRT, group = TRT)) +
-  geom_line(size = 1.2) +
+
+# Escalation by hour
+p4 <- ggplot(escalation_summary, aes(x = hour_bin, y = mean_prob, color = treatment, group = treatment)) +
   geom_point(size = 2) +
+  geom_smooth(method = "loess", se = FALSE, size = 1.2, span = 0.75) +
   labs(
-    title = "Proportion of Audio Cues Over Time by Treatment",
+    title = "Smoothed Probability of Escalation",
     x = "Hour of Period",
-    y = "Percent Audio",
+    y = "Probability Pulse Follows Audio",
     color = "Treatment"
   ) +
+  scale_color_manual(values = c("Treatment" = "darkorange", "Control" = "forestgreen")) +
   scale_y_continuous(labels = scales::percent_format(accuracy = 1), limits = c(0, 1)) +
-  scale_x_continuous(breaks = unique(percent_audio_summary$hour_bin)) +
+  scale_x_continuous(breaks = c(0, 2, 4, 6, 8, 10, 12, 14, 16, 18)) +
   theme_minimal(base_size = 14) +
-  theme(plot.title = element_text(hjust = 0.5))
+  theme(plot.title = element_text(hjust = 0.5),
+        legend.title = element_blank())
 
 
+#ggsave(filename = "Escalation.png",
+#       plot = p4,
+#       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
+#       dpi = 300,
+#       width = 6,
+#       height = 4,
+#       units = "in")
 
 
 
