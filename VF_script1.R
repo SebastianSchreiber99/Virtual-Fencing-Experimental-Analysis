@@ -133,16 +133,13 @@ eshep_full_df_noNA <- eshep_full_df %>%
 # Convert df to spatial points object
 eshep_full_sf <- st_as_sf(eshep_full_df_noNA, coords = c("longitude", "latitude"), crs = crs(training_VPs))
 
-# Add columns based on whether points occur within polygons of interest
-training1_inside <- st_within(eshep_full_sf, training_VPs[1, ], sparse = FALSE)[ , 1]
-training2_inside <- st_within(eshep_full_sf, training_VPs[2, ], sparse = FALSE)[ , 1]
-training3_inside <- st_within(eshep_full_sf, training_VPs[3, ], sparse = FALSE)[ , 1]
-west_ex_inside <- st_within(eshep_full_sf,
-                            filter(exclusion_zones, Description == "west"),
-                                   sparse = FALSE)[ , 1]
-east_ex_inside <- st_within(eshep_full_sf,
-                            filter(exclusion_zones, Description == "east"),
-                            sparse = FALSE)[ , 1]
+
+# Clean points outside pasture boundary with slight buffer zone
+perimeter_buffer <- st_read(dsn = "C:/Users/spsch/Documents/R/Virtual_Fence/perimeter_buffer.kml")
+
+eshep_full_sf <- eshep_full_sf %>%
+  mutate(in_perimeter = st_within(eshep_full_sf, perimeter_buffer, sparse = FALSE)[ ,1]) %>%
+  filter(in_perimeter == TRUE)
 
 
 # Categorize points by experiment period
@@ -164,15 +161,33 @@ eshep_full_sf <- eshep_full_sf %>%
                                                             NA))))))))
 
 
+
+
+
+# Add columns based on whether points occur within polygons of interest
+training1_inside <- st_within(eshep_full_sf, training_VPs[1, ], sparse = FALSE)[ , 1]
+training2_inside <- st_within(eshep_full_sf, training_VPs[2, ], sparse = FALSE)[ , 1]
+training3_inside <- st_within(eshep_full_sf, training_VPs[3, ], sparse = FALSE)[ , 1]
+west_ex_inside <- st_within(eshep_full_sf,
+                            filter(exclusion_zones, Description == "west"),
+                                   sparse = FALSE)[ , 1]
+east_ex_inside <- st_within(eshep_full_sf,
+                            filter(exclusion_zones, Description == "east"),
+                            sparse = FALSE)[ , 1]
+
+
+
+
+
 # Match point occurrence to experiment period
-eshep_full_sf <- eshep_full_sf %>%
+eshep_full_sf_ex <- eshep_full_sf %>%
   mutate(training1_inside = ifelse(period == "Tr1", training1_inside, NA)) %>%
   mutate(training2_inside = ifelse(period == "Tr2", training2_inside, NA)) %>%
   mutate(training3_inside = ifelse(period == "Tr3", training3_inside, NA)) %>%
   mutate(west_ex_inside = ifelse(period %in% c("W1", "W2"), west_ex_inside, NA)) %>%
   mutate(east_ex_inside = ifelse(period %in% c("E1", "E2"), east_ex_inside, NA))
 
-eshep_full_sf <- eshep_full_sf %>%
+eshep_full_sf_ex <- eshep_full_sf_ex %>%
   mutate(
     inside_VF = case_when(
       period == "Tr1" ~ training1_inside,
@@ -183,7 +198,7 @@ eshep_full_sf <- eshep_full_sf %>%
 
 
 # Calculate proportion of points inside VF for each animal and convert to df
-m2_df <- eshep_full_sf %>%
+m2_df <- eshep_full_sf_ex %>%
   group_by(Animal_ID, TRT, Group, period) %>%
   summarise(
     n_pts = n(),
@@ -212,7 +227,7 @@ print(emm2)
 
 
 #-----Percent in - Bar Plot-------
-emm_df <- as.data.frame(emm) %>%
+emm_df <- as.data.frame(emm2) %>%
   mutate(
     SE = SE,
     ymin = asymp.LCL,
@@ -255,11 +270,11 @@ p2 <- ggplot(emm_df, aes(x = treatment, y = prob, fill = treatment)) +
 buffers <- st_read(dsn = "C:/Users/spsch/Documents/R/Virtual_Fence/Buffers.kml")
 
 # Only keep points associated with cues
-eshep_cues_sf <- eshep_full_sf %>%
+eshep_cues_sf_ex <- eshep_full_sf_ex %>%
   filter(No..Audios >= 1 | No..Pulses >= 1)
 
 # Only keep points within buffer zones during phase 2
-eshep_buffer_ex <- eshep_cues_sf %>%
+eshep_buffer_ex <- eshep_cues_sf_ex %>%
   filter(period %in% c("E1", "E2", "W1", "W2"))
 
 eshep_buffer_ex <- st_intersection(eshep_buffer_ex, buffers)
@@ -286,7 +301,7 @@ eshep_buffer1_2 <- eshep_buffer_ex %>%
   as.data.frame() %>%
   select(Time..UTC., No..Audios, No..Pulses, Animal_ID, Group, TRT, period)
 
-eshep_buffer2_2 <- eshep_cues_sf %>%
+eshep_buffer2_2 <- eshep_cues_sf_ex %>%
   filter(period %in% c("Tr1", "Tr2", "Tr3")) %>%
   as.data.frame() %>%
   select(Time..UTC., No..Audios, No..Pulses, Animal_ID, Group, TRT, period)
@@ -420,7 +435,7 @@ p3 <- ggplot(cue_summary, aes(x = hour_bin, y = total_cues,
                      linetype = cue_type,
                      group = interaction(cue_type, treatment))) +
  # geom_point(size = 2) +
-  geom_smooth(method = "loess", se = FALSE, size = 1.2, span = .7) +
+  geom_smooth(method = "loess", se = FALSE, linewidth = 1.2, span = .7) +
   labs(
     title = "Cues by Hour (smoothed)",
     x = "Hour of Period",
@@ -465,7 +480,7 @@ escalation_summary <- hour_summary %>%
 # Escalation by hour
 p4 <- ggplot(escalation_summary, aes(x = hour_bin, y = mean_prob, color = treatment, group = treatment)) +
   geom_point(size = 2) +
-  geom_smooth(method = "loess", se = FALSE, size = 1.2, span = 0.75) +
+  geom_smooth(method = "loess", se = FALSE, linewidth = 1.2, span = 0.75) +
   labs(
     title = "Smoothed Probability of Escalation",
     x = "Hour of Period",
@@ -582,7 +597,7 @@ p5 <- ggplot(cue_period_long, aes(x = period, y = count,
                             color = treatment,
                             linetype = cue_type,
                             group = interaction(cue_type, treatment))) +
-  geom_smooth(method = "loess", se = FALSE, size = 1.2, span = 0.4) +
+  geom_smooth(method = "loess", se = FALSE, linewidth = 1.2, span = 0.4) +
   labs(
     title = "Cues by Period (smoothed)",
     x = "Period (chronological)",
@@ -590,7 +605,7 @@ p5 <- ggplot(cue_period_long, aes(x = period, y = count,
     color = "Treatment",
     linetype = "Cue Type"
   ) +
-  scale_color_manual(values = c("Treatment" = "darkorange", "Control" = "lightgreen")) +
+  scale_color_manual(values = c("Treatment" = "darkorange", "Control" = "forestgreen")) +
   scale_linetype_manual(values = c("Audio" = "dotted", "Pulse" = "solid")) +
   theme_minimal(base_size = 14) +
   theme(
@@ -600,7 +615,7 @@ p5 <- ggplot(cue_period_long, aes(x = period, y = count,
 
 
 
-#ggsave(filename = "Cues_by_phase.png",
+#ggsave(filename = "Cues_by_period.png",
 #       plot = p5,
 #       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
 #       dpi = 300,
@@ -864,6 +879,29 @@ p8 <- ggplot(emm_combined, aes(x = phase, y = prob, fill = treatment)) +
 ###----------------Spatial Analyses-------------------------
 
 #---------Training Phase - Proximity to VF------------------
+
+#This is done on training phase only to avoid spatial-visual markers given the possible association between the hay bale and the VF for control groups. Visual cues during the exclusion zone phase function less to show fence location and more to signial which fence is active.
+
+#Read in and clean data
+exclusion_zones <- st_read(dsn = "C:/Users/spsch/Documents/R/Virtual_Fence/Exclusion_Zones.kml")
+
+fencelines <- st_read(dsn = "C:/Users/spsch/Documents/R/Virtual_Fence/Fencelines.kml")
+
+exclusion_zones$Description <- c("west", "east", "east", "east", "east", "east",
+                                 "east", "west", "west", "west", "west", "west")
+
+
+# Calculate distance from fence lines for each period
+eshep_distance_sf <- eshep_full_sf %>%
+  mutate(distanceVF1 = st_distance(eshep_full_sf, fencelines[1, ]),
+         distanceVF2 = st_distance(eshep_full_sf, fencelines[2, ]),
+         distanceVF3 = st_distance(eshep_full_sf, fencelines[3, ])) %>%
+  mutate(distance_curr = ifelse(period == "Tr1", distanceVF1,
+                                ifelse(period == "Tr2", distanceVF2,
+                                       ifelse(period == "Tr3", distanceVF3, NA)))) %>%
+  filter(!is.na(distance_curr))
+
+
 
 
 #-------Testing Phase - Points within "open" hay bale-------
