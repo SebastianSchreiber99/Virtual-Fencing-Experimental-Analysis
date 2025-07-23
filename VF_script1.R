@@ -1,4 +1,4 @@
-packages_to_load <- c("tidyverse", "glmmTMB", "emmeans", "ggplot2", "sf", "terra", "lubridate", "lme4", "performance") # create vector of R package names that we know are needed in the rest of the code
+packages_to_load <- c("tidyverse", "glmmTMB", "emmeans", "ggplot2", "sf", "terra", "lubridate", "lme4", "performance", "DHARMa") # create vector of R package names that we know are needed in the rest of the code
 
 
 ## ----load_libraries----
@@ -8,32 +8,48 @@ lapply(packages_to_load, library, character.only = TRUE)
 ##-----------------------------VF Efficacy-----------------------------
 
 #-----Escapes - GLMM----
-esc <- read.csv(file = "C:/Users/spsch/Documents/R/Virtual_Fence/Escapes.csv")
-
-esc <- esc %>%
-  mutate(Escape_Type = as.factor(Escape_Type)) %>%
-  mutate(Group = as.factor(Group))
-
-# This data includes zeros to give the model the information that escapes did not occur under those conditions. If you only analyze rows where an escape happened, the model thinks missing combinations are “unknown,” not “zero,” which (1) throws away most of your data, (2) inflates uncertainty, and (3) can easily lead to a non‑significant result even when the raw counts suggest a real difference.
-esc_summ <- read.csv(file = "C:/Users/spsch/Documents/R/Virtual_Fence/Escapes_summary.csv")
-
-
 groups <- read.csv("C:/Users/spsch/Documents/R/Virtual_Fence/Groups.csv")
+
+esc <- read.csv(file = "C:/Users/spsch/Documents/R/Virtual_Fence/Escapes2.csv")
+
+
+# We need to include zeros to give the model the information that escapes did not occur under those conditions. If you only analyze rows where an escape happened, the model thinks missing combinations are “unknown,” not “zero,” which (1) throws away most of your data, (2) inflates uncertainty, and (3) can easily lead to a non‑significant result even when the raw counts suggest a real difference.
+
+escape_types <- c("Electric", "Virtual")
+
+# Create full grid of combinations
+full_grid_esc <- expand_grid(
+  groups,
+  Escape_Type = escape_types)
+
+# Summarize escapes by animal × period
+esc_summary <- esc %>%
+  group_by(Animal_ID, TRT, Group, Escape_Type) %>%
+  summarise(
+    Total_escapes = sum(Escape_no, na.rm = TRUE),
+    .groups = "drop")
+
+
+# Join with full grid to retain zeroes!
+esc_summary_df <- full_grid_esc %>%
+  left_join(esc_summary, by = c("Animal_ID", "TRT", "Group", "Escape_Type")) %>%
+  mutate(Total_escapes = replace_na(Total_escapes, 0))
+
 
 
 # Why use GLMM rather than LMM? Data in this case are counts. Counts are not normally distributed and their variance usually depends on the mean (e.g., Poisson or negative binomial behavior).GLMMs extend LMMs by allowing different distributions (e.g., Poisson, Negative Binomial) for the response variable. Instead of modeling the raw response, GLMMs use a link function (log link for counts), ensuring predictions stay positive.
 
 # Fit Poisson GLMM
+# An offset is not needed because all animals have the same rate of exposure to potential escapes
 m1 <- glmmTMB(
-  total_esc ~ esc_type + (1|group),
-  offset = log(animal_days), # An offset in a Poisson model adjusts for exposure time (or n) to estimate rate instead of raw counts. 
+  Total_escapes ~ Escape_Type + (1|Group),
   family = poisson,
-  data = esc_summ
-)
+  data = esc_summary_df)
 
 summary(m1)
+
 # Rate ratio
-emmeans(m1, pairwise ~ esc_type, offset = log(1), type = "response")# offset = log(1) sets the rate to escapes per 1 animal-day
+emmeans(m1, pairwise ~ Escape_Type, type = "response")
 
 # Model Validation
 sim_res <- simulateResiduals(m1, n = 1000)
@@ -43,7 +59,7 @@ testDispersion(sim_res)
 #-----Escapes - Bar plot-----
 
 # Get estimated mean rates from your model (m_pois or m_nb)
-emm <- emmeans(m1, ~ esc_type, offset = log(1), type = "response")
+emm <- emmeans(m1, ~ Escape_Type, type = "response")
 
 emm_df <- as.data.frame(emm) %>%
   mutate(
@@ -54,7 +70,7 @@ emm_df <- as.data.frame(emm) %>%
 
 
 # Plot
-p1 <- ggplot(emm_df, aes(x = esc_type, y = rate, fill = esc_type)) +
+p1 <- ggplot(emm_df, aes(x = Escape_Type, y = rate, fill = Escape_Type)) +
   geom_col(width = 0.6, color = "black") +
   geom_errorbar(aes(ymin = ymin, ymax = ymax), width = 0.2) +
   labs(
@@ -484,7 +500,7 @@ full_grid_periods <- expand_grid(
   period = periods)
 
 
-# Summarize cue data by animal × period × hour
+# Summarize cue data by animal × period × period
 cue_summary_by_period <- eshep_cue_df_clean %>%
   group_by(Animal_ID, TRT, Group, period) %>%
   summarise(
@@ -643,14 +659,214 @@ p6 <- ggplot(escalation_summary2, aes(x = period, y = mean_prob, color = treatme
 
 
 
-
-
-
-
 #-----------------Rate of Learning by phase-------------------------------
 
+phases <- c("1: Training", "2: Exclusion Zone Testing")
 
+# Create full grid of combinations to retain zeros
+full_grid_phase <- expand_grid(
+  groups,
+  phase = phases)
+
+
+# Summarize cue data by animal × period × phase
+cue_summary_by_phase <- eshep_cue_df_clean %>%
+  mutate(phase = ifelse(period %in% c("Tr1", "Tr2", "Tr3"), "1: Training",
+                        ifelse(period %in% c("E1", "E2", "W1", "W2"), "2: Exclusion Zone Testing", NA))) %>%
+  group_by(Animal_ID, TRT, Group, phase) %>%
+  summarise(
+    total_audios = sum(`No..Audios`, na.rm = TRUE),
+    total_pulses = sum(`No..Pulses`, na.rm = TRUE),
+    .groups = "drop")
+
+
+# Join with full grid to retain zeroes!
+phase_summary <- full_grid_phase %>%
+  left_join(cue_summary_by_phase, by = c("Animal_ID", "TRT", "Group", "phase")) %>%
+  mutate(
+    total_audios = replace_na(total_audios, 0),
+    total_pulses = replace_na(total_pulses, 0)) %>%
+  mutate(total_cues = total_audios + total_pulses)
+
+
+
+# Fit Poisson GLMM
+
+#Phase 1
+m3.6 <- glmmTMB(
+  total_audios ~ TRT + (1|Animal_ID) + (1|Group),
+  family = poisson,
+  data = filter(phase_summary, phase == "1: Training"))
+
+summary(m3.6)
+
+
+#Phase 2
+m3.6.1 <- glmmTMB(
+  total_audios ~ TRT + (1|Animal_ID) + (1|Group),
+  family = poisson,
+  data = filter(phase_summary, phase == "2: Exclusion Zone Testing"))
+
+summary(m3.6.1)
+
+
+#Phase 1
+m3.7 <- glmmTMB(
+  total_pulses ~ TRT + (1|Animal_ID) + (1|Group),
+  family = poisson,
+  data = filter(phase_summary, phase == "1: Training"))
+
+summary(m3.7)
+
+
+#Phase 2
+m3.7.1 <- glmmTMB(
+  total_pulses ~ TRT + (1|Animal_ID) + (1|Group),
+  family = poisson,
+  data = filter(phase_summary, phase == "2: Exclusion Zone Testing"))
+
+summary(m3.7.1)
+
+
+
+# Fit binomial GLMM
+
+#Phase 1
+m3.8 <- glmmTMB(
+  cbind(total_pulses, total_audios - total_pulses) ~ TRT + 
+    (1|Animal_ID) + (1|Group),
+  family = binomial,
+  data = filter(phase_summary, phase == "1: Training"))
+
+summary(m3.8)
+
+
+#Phase 2
+#Note: this result is misleading because after the first period of phase 2, no treatment animals went near the VF
+# Thus, the this refelcts data from only the first exclusion zone trial when animals were initially adapting to the new phase
+m3.8.1 <- glmmTMB(
+  cbind(total_pulses, total_audios - total_pulses) ~ TRT + 
+    (1|Animal_ID), # Group rnadom effect was removed as it caused a model convergence issue (non-positive-definite Hessian matrix)
+  family = binomial,
+  data = filter(phase_summary, phase == "2: Exclusion Zone Testing"))
+
+summary(m3.8.1)
 
 
 #-----------------Rate of Learning by phase - Plots-------------------------------
+
+# Reshape to long format
+phase_long <- phase_summary %>%
+  pivot_longer(cols = c(total_audios, total_pulses),
+               names_to = "cue_type",
+               values_to = "count") %>%
+  mutate(
+    cue_type = recode(cue_type,
+                      total_audios = "Audios",
+                      total_pulses = "Pulses"),
+    TRT = factor(TRT, levels = c("CNT", "TRT")),
+    phase = factor(phase, levels = c("1: Training", "2: Exclusion Zone Testing")))
+
+# Summarize with mean and 95% CI
+plot_df <- phase_long %>%
+  group_by(phase, TRT, cue_type) %>%
+  summarise(
+    mean_count = mean(count),
+    se = sd(count) / sqrt(n()),
+    .groups = "drop") %>%
+  mutate(
+    ci_lower = mean_count - 1.96 * se,
+    ci_upper = mean_count + 1.96 * se,
+    treatment = ifelse(TRT == "TRT", "Treatment", "Control"))
+
+
+# Plot with error bars
+p7 <- ggplot(plot_df, aes(x = cue_type, y = mean_count, fill = treatment)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7, color = "black") +
+  geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper),
+                position = position_dodge(width = 0.8), width = 0.2) +
+  facet_wrap(~ phase) +
+  labs(
+    title = "Cue Counts by Treatment",
+    x = "Cue Type",
+    y = "Mean Cues per Animal",
+    fill = "Treatment"
+  ) +
+  scale_fill_manual(values = c("Control" = "forestgreen", "Treatment" = "darkorange")) +
+  theme_minimal(base_size = 14) +
+  theme(
+    strip.text = element_text(face = "bold"),
+    plot.title = element_text(hjust = 0.5),
+    legend.title = element_blank(),
+    panel.spacing = unit(2, "lines"))
+
+
+#ggsave(filename = "Cue_Counts_phase.png",
+#       plot = p7,
+#       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
+#       dpi = 300,
+#       width = 7,
+#       height = 5,
+#       units = "in")
+
+
+
+
+# Extract estimated probabilities from each model
+emm1.1 <- emmeans(m3.8, ~ TRT, type = "response") %>%
+  as.data.frame() %>%
+  mutate(phase = "1: Training")
+
+emm2.1 <- emmeans(m3.8.1, ~ TRT, type = "response") %>%
+  as.data.frame() %>%
+  mutate(phase = "2: Exclusion Zone Testing")
+
+# Combine into one data frame
+emm_combined <- bind_rows(emm1.1, emm2.1) %>%
+  rename(prob = prob, lower = asymp.LCL, upper = asymp.UCL) %>%
+  mutate(
+    phase = factor(phase, levels = c("1: Training", "2: Exclusion Zone Testing")),
+    TRT = factor(TRT, levels = c("CNT", "TRT")),
+    treatment = ifelse(TRT == "TRT", "Treatment", "Control"))
+
+
+# Plot the estimated probabilities with error bars
+# Note: this plot is misleading because after the first period of phase 2, no treatment animals went near the VF
+# Thus, the right panel of the plot refelcts data from only the first exclusion zone trial when animals were initially adapting to the new phase
+p8 <- ggplot(emm_combined, aes(x = phase, y = prob, fill = treatment)) +
+  geom_col(position = position_dodge(width = 0.7), width = 0.6, color = "black") +
+  geom_errorbar(aes(ymin = lower, ymax = upper),
+                position = position_dodge(width = 0.7), width = 0.2) +
+  labs(
+    title = "Probability of Escalation",
+    x = "Phase",
+    y = "Mean Probability Pulse Follows Audio",
+    fill = "Treatment"
+  ) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1), limits = c(0, 1)) +
+  scale_fill_manual(values = c("Control" = "forestgreen", "Treatment" = "darkorange")) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    legend.title = element_blank())
+
+
+#ggsave(filename = "Escalation_phase.png",
+#       plot = p8,
+#       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
+#       dpi = 300,
+#       width = 6,
+#       height = 5,
+#       units = "in")
+
+
+
+###----------------Spatial Analyses-------------------------
+
+#---------Training Phase - Proximity to VF------------------
+
+
+#-------Testing Phase - Points within "open" hay bale-------
+
+#-----------------Heatmaps for hay bale use-----------------
 
