@@ -902,6 +902,99 @@ eshep_distance_sf <- eshep_full_sf %>%
   filter(!is.na(distance_curr))
 
 
+# Add column specifying distance of 10 m
+eshep_10m_df <- eshep_distance_sf %>%
+  as.data.frame() %>%
+  mutate(Within_10m = ifelse(distance_curr <= 10, 1, 0))
+
+
+
+# Redefine all periods to use as random effect later
+periods_tr <- c("Tr1", "Tr2", "Tr3")
+
+# Create full grid of combinations to retain zeros
+full_grid_10m <- expand_grid(
+  groups,
+  period = periods_tr)
+
+
+# Summarize points within 10m by animal × period
+Points_within_10m <- eshep_10m_df %>%
+  group_by(Animal_ID, TRT, Group, period) %>%
+  summarise(
+    total_points_in_10m = sum(Within_10m, na.rm = TRUE),
+    .groups = "drop")
+
+
+# Join with full grid to retain zeroes!
+points_within_10m_summary <- full_grid_10m %>%
+  left_join(Points_within_10m, by = c("Animal_ID", "TRT", "Group", "period")) %>%
+  mutate(total_points_in_10m = replace_na(total_points_in_10m, 0))
+
+
+
+
+# Fit GLMM Poisson
+m4 <- glmmTMB(
+  total_points_in_10m ~ TRT + (1|Animal_ID) + (1|Group) + (1|period),
+  family = poisson,
+  data = points_within_10m_summary)
+
+summary(m4)
+
+
+# Model validation and over dispersion check
+check_overdispersion(m4)
+
+res4 <- simulateResiduals(fittedModel = m4, n = 1000)
+plot(res4)
+testDispersion(res4)
+
+
+
+#--------- Proximity to VF - Plot ------------------
+
+# Summarize mean and standard error by treatment
+# Summarize mean and 95% confidence interval by treatment
+summary_df <- points_within_10m_summary %>%
+  group_by(TRT) %>%
+  summarise(
+    mean_points = mean(total_points_in_10m),
+    se = sd(total_points_in_10m) / sqrt(n()),
+    n = n()
+  ) %>%
+  mutate(
+    ci_lower = mean_points - 1.96 * se,
+    ci_upper = mean_points + 1.96 * se,
+    treatment = ifelse(TRT == "TRT", "Treatment", "Control"))
+
+
+# Plot
+p9 <- ggplot(summary_df, aes(x = treatment, y = mean_points, fill = treatment)) +
+  geom_col(width = 0.6, color = "black") +
+  geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper), width = 0.2) +
+  labs(
+    title = "Proximity to Virtual Fence during Training",
+    y = "Mean Points within 10m of VF per Period",
+    x = element_blank()
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(hjust = 0.4),
+    legend.position = "none") +
+  scale_fill_manual(values = c("Control" = "forestgreen", "Treatment" = "darkorange"))
+  
+
+#ggsave(filename = "Points_within_10m.png",
+#       plot = p9,
+#       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
+#       dpi = 300,
+#       width = 5,
+#       height = 5,
+#       units = "in")
+
+
+
 
 
 #-------Testing Phase - Points within "open" hay bale-------
