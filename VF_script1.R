@@ -164,28 +164,28 @@ eshep_full_sf <- eshep_full_sf %>%
 
 
 
-# Add columns based on whether points occur within polygons of interest
-training1_inside <- st_within(eshep_full_sf, training_VPs[1, ], sparse = FALSE)[ , 1]
-training2_inside <- st_within(eshep_full_sf, training_VPs[2, ], sparse = FALSE)[ , 1]
-training3_inside <- st_within(eshep_full_sf, training_VPs[3, ], sparse = FALSE)[ , 1]
-west_ex_inside <- st_within(eshep_full_sf,
-                            filter(exclusion_zones, Description == "west"),
-                                   sparse = FALSE)[ , 1]
-east_ex_inside <- st_within(eshep_full_sf,
-                            filter(exclusion_zones, Description == "east"),
-                            sparse = FALSE)[ , 1]
+# Training phase
+training1_inside <- st_within(eshep_full_sf, training_VPs[1, ], sparse = FALSE)[, 1]
+training2_inside <- st_within(eshep_full_sf, training_VPs[2, ], sparse = FALSE)[, 1]
+training3_inside <- st_within(eshep_full_sf, training_VPs[3, ], sparse = FALSE)[, 1]
+
+# Exclusion zones
+west_matrix <- st_within(eshep_full_sf, filter(exclusion_zones, Description == "west"), sparse = FALSE)
+west_ex_inside <- apply(west_matrix, 1, any)
+
+east_matrix <- st_within(eshep_full_sf, filter(exclusion_zones, Description == "east"), sparse = FALSE)
+east_ex_inside <- apply(east_matrix, 1, any)
 
 
-
-
-
-# Match point occurrence to experiment period
+# Bind the columns
 eshep_full_sf_ex <- eshep_full_sf %>%
-  mutate(training1_inside = ifelse(period == "Tr1", training1_inside, NA)) %>%
-  mutate(training2_inside = ifelse(period == "Tr2", training2_inside, NA)) %>%
-  mutate(training3_inside = ifelse(period == "Tr3", training3_inside, NA)) %>%
-  mutate(west_ex_inside = ifelse(period %in% c("W1", "W2"), west_ex_inside, NA)) %>%
-  mutate(east_ex_inside = ifelse(period %in% c("E1", "E2"), east_ex_inside, NA))
+  mutate(
+    training1_inside = training1_inside,
+    training2_inside = training2_inside,
+    training3_inside = training3_inside,
+    west_ex_inside = west_ex_inside,
+    east_ex_inside = east_ex_inside)
+
 
 eshep_full_sf_ex <- eshep_full_sf_ex %>%
   mutate(
@@ -193,8 +193,9 @@ eshep_full_sf_ex <- eshep_full_sf_ex %>%
       period == "Tr1" ~ training1_inside,
       period == "Tr2" ~ training2_inside,
       period == "Tr3" ~ training3_inside,
-      period %in% c("E1","E2") ~ !east_ex_inside,
-      period %in% c("W1","W2") ~ !west_ex_inside))
+      period %in% c("E1", "E2") ~ !east_ex_inside,
+      period %in% c("W1", "W2") ~ !west_ex_inside,
+      TRUE ~ NA))
 
 
 # Calculate proportion of points inside VF for each animal and convert to df
@@ -253,7 +254,7 @@ p2 <- ggplot(emm_df, aes(x = treatment, y = prob, fill = treatment)) +
 
 
 #ggsave(filename = "Efficacy.png",
-#       plot = p2,
+#      plot = p2,
 #       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
 #       dpi = 300,
 #       width = 5,
@@ -996,8 +997,60 @@ p9 <- ggplot(summary_df, aes(x = treatment, y = mean_points, fill = treatment)) 
 
 
 
-
 #-------Testing Phase - Points within "open" hay bale-------
+
+# Add columns based on whether points occur within open hay bales
+inside_open_ex_points <- eshep_full_sf_ex %>%
+  mutate(inside_open_ex = ifelse(period %in% c("E1", "E2") & west_ex_inside == TRUE, TRUE,
+                                 ifelse(period %in% c("W1", "W2") & east_ex_inside == TRUE, TRUE, NA))) %>%
+  filter(inside_open_ex == TRUE) %>%
+  as.data.frame()
+
+
+# Redefine all periods to use as random effect later
+periods_ex <- c("E1", "E2", "W1", "W2")
+
+# Create full grid of combinations to retain zeros
+full_grid_open_ex <- expand_grid(
+  groups,
+  period = periods_ex)
+
+
+# Summarize points by animal × period
+inside_open_ex_points <- inside_open_ex_points %>%
+  group_by(Animal_ID, TRT, Group, period) %>%
+  summarise(
+    total_points_inside_ex = sum(inside_open_ex, na.rm = TRUE),
+    .groups = "drop")
+
+
+# Join with full grid to retain zeroes!
+inside_open_ex_points_summary <- full_grid_open_ex %>%
+  left_join(inside_open_ex_points, by = c("Animal_ID", "TRT", "Group", "period")) %>%
+  mutate(total_points_inside_ex = replace_na(total_points_inside_ex, 0))
+
+
+
+# Fit GLMM Poisson
+m5 <- glmmTMB(
+  total_points_inside_ex ~ TRT + (1|Animal_ID) + (1|Group) + (1|period),
+  family = poisson,
+  data = inside_open_ex_points_summary)
+
+summary(m5)
+
+
+# Model validation and over dispersion check
+check_overdispersion(m5)
+
+res5 <- simulateResiduals(fittedModel = m5, n = 1000)
+plot(res5)
+testDispersion(res5)
+
+
+#########    Time interaction????? ##########
+
+
 
 #-----------------Heatmaps for hay bale use-----------------
 
