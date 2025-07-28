@@ -430,6 +430,10 @@ cue_summary <- hour_summary %>%
   mutate(treatment = ifelse(TRT == "TRT", "Treatment", "Control"))
 
 
+hour_labels <- c("12 PM", "4 PM", "8 PM", "12 AM", "4 AM", "8 AM", "12 PM")
+hour_breaks <- seq(0, 24, by = 4)
+
+
 # Plot of number of cues by hour
 p3 <- ggplot(cue_summary, aes(x = hour_bin, y = total_cues,
                      color = treatment,
@@ -446,13 +450,18 @@ p3 <- ggplot(cue_summary, aes(x = hour_bin, y = total_cues,
   ) +
   scale_color_manual(values = c("Treatment" = "darkorange", "Control" = "forestgreen")) +
   scale_linetype_manual(values = c("Audio" = "dotted", "Pulse" = "solid")) +
-  scale_x_continuous(breaks = c(0, 2, 4, 6, 8, 10, 12, 14, 16, 18)) +
+  scale_x_continuous(
+    breaks = hour_breaks,
+    sec.axis = dup_axis(
+      breaks = hour_breaks,
+      labels = hour_labels,
+      name = "Time of Day")) +
   theme_minimal(base_size = 14) +
   theme(plot.title = element_text(hjust = 0.5),
         legend.title = element_blank())
 
 
-#ggsave(filename = "Cues_by_hour_np.png",
+#ggsave(filename = "Cues_by_hour.png",
 #       plot = p3,
 #       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
 #       dpi = 300,
@@ -477,10 +486,14 @@ escalation_summary <- hour_summary %>%
     ymax = pmin(1, mean_prob + se)) %>%
   mutate(treatment = ifelse(TRT == "TRT", "Treatment", "Control"))
 
+# Map hour bins (0–12) to time labels (12 PM to 12 AM)
+hour_labels <- c("12 PM", "4 PM", "8 PM", "12 AM", "4 AM", "8 AM", "12 PM")
+hour_breaks <- seq(0, 24, by = 4)
 
+
+ 
 # Escalation by hour
 p4 <- ggplot(escalation_summary, aes(x = hour_bin, y = mean_prob, color = treatment, group = treatment)) +
-  geom_point(size = 2) +
   geom_smooth(method = "loess", se = FALSE, linewidth = 1.2, span = 0.75) +
   labs(
     title = "Smoothed Probability of Escalation",
@@ -490,13 +503,18 @@ p4 <- ggplot(escalation_summary, aes(x = hour_bin, y = mean_prob, color = treatm
   ) +
   scale_color_manual(values = c("Treatment" = "darkorange", "Control" = "forestgreen")) +
   scale_y_continuous(labels = scales::percent_format(accuracy = 1), limits = c(0, 1)) +
-  scale_x_continuous(breaks = c(0, 2, 4, 6, 8, 10, 12, 14, 16, 18)) +
+  scale_x_continuous(
+    breaks = hour_breaks,
+    sec.axis = dup_axis(
+      breaks = hour_breaks,
+      labels = hour_labels,
+      name = "Time of Day")) +
   theme_minimal(base_size = 14) +
   theme(plot.title = element_text(hjust = 0.5),
         legend.title = element_blank())
 
 
-#ggsave(filename = "Escalation.png",
+#ggsave(filename = "Escalation_hour.png",
 #       plot = p4,
 #       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
 #       dpi = 300,
@@ -649,7 +667,6 @@ escalation_summary2$period <- factor(escalation_summary2$period,
 
 # Escalation by hour
 p6 <- ggplot(escalation_summary2, aes(x = period, y = mean_prob, color = treatment, group = treatment)) +
-  geom_point(size = 2) +
   geom_smooth(method = "loess", se = FALSE, size = 1.2, span = 0.6) +
   labs(
     title = "Probability of Escalation (smoothed)",
@@ -665,7 +682,7 @@ p6 <- ggplot(escalation_summary2, aes(x = period, y = mean_prob, color = treatme
         axis.text.x = element_text(angle = 45, hjust = 1))
 
 
-#ggsave(filename = "Escalation2.png",
+#ggsave(filename = "Escalation_period.png",
 #       plot = p6,
 #       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
 #       dpi = 300,
@@ -999,6 +1016,8 @@ p9 <- ggplot(summary_df, aes(x = treatment, y = mean_points, fill = treatment)) 
 
 #-------Testing Phase - Points within "open" hay bale-------
 
+
+
 # Add columns based on whether points occur within open hay bales
 inside_open_ex_points <- eshep_full_sf_ex %>%
   mutate(inside_open_ex = ifelse(period %in% c("E1", "E2") & west_ex_inside == TRUE, TRUE,
@@ -1007,18 +1026,31 @@ inside_open_ex_points <- eshep_full_sf_ex %>%
   as.data.frame()
 
 
-# Redefine all periods to use as random effect later
+# Process timestamps and bin hours
+inside_open_ex_points <- inside_open_ex_points %>%
+  mutate(
+    datetime = ymd_hms(`Time..UTC.`),
+    hour = hour(datetime) + minute(datetime) / 60 + second(datetime) / 3600,
+    hour = hour - 12,
+    hour = if_else(hour < 0, hour + 24, hour),
+    hour_bin = floor(hour))
+
+
+# Redefine all periods and hour bins
 periods_ex <- c("E1", "E2", "W1", "W2")
+hour_bins <- 0:23
+
 
 # Create full grid of combinations to retain zeros
 full_grid_open_ex <- expand_grid(
   groups,
+  hour_bin = hour_bins,
   period = periods_ex)
 
 
 # Summarize points by animal × period
 inside_open_ex_points <- inside_open_ex_points %>%
-  group_by(Animal_ID, TRT, Group, period) %>%
+  group_by(Animal_ID, TRT, Group, period, hour_bin) %>%
   summarise(
     total_points_inside_ex = sum(inside_open_ex, na.rm = TRUE),
     .groups = "drop")
@@ -1026,14 +1058,14 @@ inside_open_ex_points <- inside_open_ex_points %>%
 
 # Join with full grid to retain zeroes!
 inside_open_ex_points_summary <- full_grid_open_ex %>%
-  left_join(inside_open_ex_points, by = c("Animal_ID", "TRT", "Group", "period")) %>%
+  left_join(inside_open_ex_points, by = c("Animal_ID", "TRT", "Group", "period", "hour_bin")) %>%
   mutate(total_points_inside_ex = replace_na(total_points_inside_ex, 0))
 
 
 
 # Fit GLMM Poisson
 m5 <- glmmTMB(
-  total_points_inside_ex ~ TRT + (1|Animal_ID) + (1|Group) + (1|period),
+  total_points_inside_ex ~ TRT * hour_bin + (1|Animal_ID) + (1|Group) + (1|period),
   family = poisson,
   data = inside_open_ex_points_summary)
 
@@ -1048,8 +1080,53 @@ plot(res5)
 testDispersion(res5)
 
 
-#########    Time interaction????? ##########
 
+#-------Points within "open" hay bale- Plot (Testing Phase)-------
+
+# Summarize to get average points inside exclusion zone per animal per hour_bin
+plot10_summary <- inside_open_ex_points_summary %>%
+  group_by(TRT, hour_bin) %>%
+  summarise(
+    mean_points = mean(total_points_inside_ex, na.rm = TRUE),
+    .groups = "drop") %>%
+  mutate(treatment = ifelse(TRT == "TRT", "Treatment", "Control"))
+
+
+# Map hour bins (0–12) to time labels (12 PM to 12 AM)
+hour_labels <- c("12 PM", "4 PM", "8 PM", "12 AM", "4 AM", "8 AM", "12 PM")
+hour_breaks <- seq(0, 24, by = 4)
+
+
+# Plot
+p10 <- ggplot(plot10_summary, aes(x = hour_bin, y = mean_points, color = treatment)) +
+  geom_smooth(method = "loess", se = FALSE, linewidth = 1.2, span = 0.5) +
+  labs(
+    title = "Use of 'Open' Hay Bale (smoothed)",
+    x = "Hour of Period",
+    y = "Points Inside 'Open' Hay Bale (per Animal)",
+    color = "Treatment"
+  ) +
+  scale_color_manual(values = c("Treatment" = "darkorange", "Control" = "forestgreen")) +
+  scale_x_continuous(
+    breaks = hour_breaks,
+    sec.axis = dup_axis(
+      breaks = hour_breaks,
+      labels = hour_labels,
+      name = "Time of Day")) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    legend.title = element_blank())
+
+
+
+#ggsave(filename = "Open_hay_bale_use.png",
+#       plot = p10,
+#       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
+#       dpi = 300,
+#       width = 6,
+#       height = 4,
+#       units = "in")
 
 
 #-----------------Heatmaps for hay bale use-----------------
