@@ -51,6 +51,7 @@ summary(m1)
 # Rate ratio
 emmeans(m1, pairwise ~ Escape_Type, type = "response")
 
+
 # Model Validation
 sim_res <- simulateResiduals(m1, n = 1000)
 testDispersion(sim_res)
@@ -65,8 +66,8 @@ emm_df <- as.data.frame(emm) %>%
   mutate(
     SE = SE,                # Standard Error
     ymin = rate - SE,   # Lower error bar
-    ymax = rate + SE    # Upper error bar
-  )
+    ymax = rate + SE)    # Upper error bar
+
 
 
 # Plot
@@ -222,8 +223,7 @@ summary(m2)
 
 
 # gives probability inside
-emm2 <- emmeans(m2, ~ TRT, type = "response")  
-print(emm2)
+emmeans(m2, pairwise ~ TRT, type = "response")
 
 
 
@@ -361,6 +361,10 @@ m3 <- glmmTMB(
 summary(m3)
 
 
+emmeans(m3, pairwise ~ TRT, type = "response")
+
+
+
 # Poisson model yielded fixed effect standard errors that were all NaN: This means the model cannot reliably estimate the uncertainty of the coefficients — suggesting complete or quasi-complete separation, overfitting, or rank deficiency.
 # Thus, the variance may far exceed the mean (which is likely with rare pulses), so we went with a negative binomial family.
 m3.1 <- glmmTMB(
@@ -369,6 +373,11 @@ m3.1 <- glmmTMB(
   data = hour_summary)
 
 summary(m3.1)
+
+
+emmeans(m3.1, pairwise ~ TRT, type = "response")
+
+
 
 
 #Originally audio-shock ratio or the percentage of cues that were audio was modeled. But this is misleading because that percentage has a lower bound of 50%, since animals cannot receive an shock without an audio warning first. Thus, shocks are a subset of audio events, and a better framing of the question is: Given an audio, what’s the probability it was followed by a pulse?
@@ -390,6 +399,8 @@ m3.2 <- glmmTMB(
   data = hour_summary)
 
 summary(m3.2)
+
+emmeans(m3.2, pairwise ~ TRT, type = "response")
 
 
 # Model validation and over dispersion checks
@@ -570,6 +581,9 @@ m3.3 <- glmmTMB(
 
 summary(m3.3)
 
+emmeans(m3.3, pairwise ~ TRT, type = "response")
+
+
 
 
 m3.4 <- glmmTMB(
@@ -578,6 +592,9 @@ m3.4 <- glmmTMB(
   data = period_summary)
 
 summary(m3.4)
+
+emmeans(m3.4, pairwise ~ TRT, type = "response")
+
 
 
 
@@ -589,6 +606,10 @@ m3.5 <- glmmTMB(
   data = period_summary)
 
 summary(m3.5)
+
+emmeans(m3.5, pairwise ~ TRT, type = "response")
+
+
 
 
 #-----------------Rate of Learning by period - Plots-------------------------------
@@ -733,6 +754,9 @@ m3.6 <- glmmTMB(
 
 summary(m3.6)
 
+emmeans(m3.6, pairwise ~ TRT, type = "response")
+
+
 
 #Phase 2
 m3.6.1 <- glmmTMB(
@@ -741,6 +765,10 @@ m3.6.1 <- glmmTMB(
   data = filter(phase_summary, phase == "2: Exclusion Zone Testing"))
 
 summary(m3.6.1)
+
+emmeans(m3.6.1, pairwise ~ TRT, type = "response")
+
+
 
 
 #Phase 1
@@ -751,6 +779,9 @@ m3.7 <- glmmTMB(
 
 summary(m3.7)
 
+emmeans(m3.7, pairwise ~ TRT, type = "response")
+
+
 
 #Phase 2
 m3.7.1 <- glmmTMB(
@@ -759,6 +790,8 @@ m3.7.1 <- glmmTMB(
   data = filter(phase_summary, phase == "2: Exclusion Zone Testing"))
 
 summary(m3.7.1)
+
+emmeans(m3.7.1, pairwise ~ TRT, type = "response")
 
 
 
@@ -773,6 +806,9 @@ m3.8 <- glmmTMB(
 
 summary(m3.8)
 
+emmeans(m3.8, pairwise ~ TRT, type = "response")
+
+
 
 #Phase 2
 #Note: this result is misleading because after the first period of phase 2, no treatment animals went near the VF
@@ -784,6 +820,9 @@ m3.8.1 <- glmmTMB(
   data = filter(phase_summary, phase == "2: Exclusion Zone Testing"))
 
 summary(m3.8.1)
+
+emmeans(m3.8.1, pairwise ~ TRT, type = "response")
+
 
 
 #-----------------Rate of Learning by phase - Plots-------------------------------
@@ -960,6 +999,9 @@ m4 <- glmmTMB(
 
 summary(m4)
 
+emmeans(m4, pairwise ~ TRT, type = "response")
+
+
 
 # Model validation and over dispersion check
 check_overdispersion(m4)
@@ -1070,6 +1112,9 @@ m5 <- glmmTMB(
   data = inside_open_ex_points_summary)
 
 summary(m5)
+
+emmeans(m5, pairwise ~ TRT, type = "response")
+
 
 
 # Model validation and over dispersion check
@@ -1305,15 +1350,11 @@ surv_obj <- Surv(surv_data$time_to_reentry, surv_data$reentered)
 km_fit <- survfit(surv_obj ~ TRT, data = surv_data)
 
 
-# Run log-rank test (no weighting)
-logrank_test <- survdiff(Surv(time_to_reentry, reentered) ~ TRT, data = surv_data)
+# Fit a Cox Model with random effects to Estimate Effects
+coxme_model <- coxme(Surv(time_to_reentry, reentered) ~ TRT + (1 | Group), data = surv_data)
 
-# Run Wilcoxon (Breslow) test (weights earlier times higher)
-wilcox_test <- survdiff(Surv(time_to_reentry, reentered) ~ TRT, data = surv_data, rho = 1)
+summary(coxme_model)
 
-
-logrank_test
-wilcox_test
 
 
 
