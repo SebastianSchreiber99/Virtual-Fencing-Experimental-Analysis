@@ -1,4 +1,4 @@
-packages_to_load <- c("tidyverse", "glmmTMB", "emmeans", "ggplot2", "sf", "terra", "lubridate", "lme4", "performance", "DHARMa") # create vector of R package names that we know are needed in the rest of the code
+packages_to_load <- c("tidyverse", "glmmTMB", "emmeans", "ggplot2", "sf", "terra", "lubridate", "lme4", "performance", "DHARMa", "survival", "survminer", "coxme") # create vector of R package names that we know are needed in the rest of the code
 
 
 ## ----load_libraries----
@@ -249,7 +249,7 @@ p2 <- ggplot(emm_df, aes(x = treatment, y = prob, fill = treatment)) +
   theme(
     legend.position = "none",
     plot.title = element_text(hjust = 0.5)) +
-  scale_fill_manual(values = c("darkorange", "forestgreen"))
+  scale_fill_manual(values = c("forestgreen", "darkorange"))
 
 
 
@@ -1130,4 +1130,250 @@ p10 <- ggplot(plot10_summary, aes(x = hour_bin, y = mean_points, color = treatme
 
 
 #-----------------Heatmaps for hay bale use-----------------
+
+# Read and transform spatial layers
+heatmap_shapes <- st_read("C:/Users/spsch/Documents/R/Virtual_Fence/heatmap_shapes.kml") %>%
+  st_transform(32614) %>%
+  mutate(pasture = c(1, 2, 3, 4, 5, 6))
+
+eshep_full_proj <- st_transform(eshep_full_sf, crs = 32614)
+exclusion_zones_proj <- st_transform(exclusion_zones, crs = 32614)
+
+
+# Create hay bale centroids (retain geometry)
+hay_bales_east <- exclusion_zones_proj %>%
+  filter(Description == "east") %>%
+  mutate(pasture = c(6, 5, 4, 3, 2, 1)) %>%
+  st_centroid()
+
+hay_bales_west <- exclusion_zones_proj %>%
+  filter(Description == "west") %>%
+  mutate(pasture = c(6, 1, 2, 3, 4, 5)) %>%
+  st_centroid()
+
+
+# Label pasture membership for GPS points
+eshep_pts_west <- eshep_full_proj %>%
+  filter(period %in% c("E1", "E2")) %>%
+  st_join(heatmap_shapes, join = st_intersects)
+
+eshep_pts_east <- eshep_full_proj %>%
+  filter(period %in% c("W1", "W2")) %>%
+  st_join(heatmap_shapes, join = st_intersects)
+
+
+# Extract original GPS coordinates before changing geometry
+eshep_pts_east <- eshep_pts_east %>%
+  mutate(point_coords = st_coordinates(geometry))
+
+eshep_pts_west <- eshep_pts_west %>%
+  mutate(point_coords = st_coordinates(geometry))
+
+
+# Join hay bale geometry to each GPS point by pasture ID
+eshep_pts_east <- eshep_pts_east %>%
+  left_join(st_drop_geometry(hay_bales_east), by = "pasture") %>%
+  mutate(hay_coords = st_coordinates(st_geometry(hay_bales_east)[match(pasture, hay_bales_east$pasture)])) %>%
+  filter(!is.na(pasture))
+
+eshep_pts_west <- eshep_pts_west %>%
+  left_join(st_drop_geometry(hay_bales_west), by = "pasture") %>%
+  mutate(hay_coords = st_coordinates(st_geometry(hay_bales_west)[match(pasture, hay_bales_west$pasture)])) %>%
+  filter(!is.na(pasture))
+
+
+# Calculate shifted coordinates
+eshep_pts_east <- eshep_pts_east %>%
+  mutate(
+    x_shifted = point_coords[,1] - hay_coords[,1],
+    y_shifted = point_coords[,2] - hay_coords[,2])
+
+eshep_pts_west <- eshep_pts_west %>%
+  mutate(
+    x_shifted = point_coords[,1] - hay_coords[,1],
+    y_shifted = point_coords[,2] - hay_coords[,2])
+
+
+
+# Plot the overlaid heatmap - East
+heatmap_east_trt <- ggplot(filter(eshep_pts_east, TRT == "TRT"),
+       aes(x = x_shifted, y = y_shifted)) +
+  stat_density_2d_filled(
+    contour_var = "density",
+    adjust = 1.2,
+    alpha = 0.9) +
+  scale_fill_viridis_d(option = "C", direction = -1, name = "Density") +
+  coord_equal() +
+  labs(
+    title = "East (Treatment)") +
+  theme_minimal(base_size = 14)
+
+# Plot the overlaid heatmap - West
+heatmap_west_trt <- ggplot(filter(eshep_pts_west, TRT == "TRT"),
+       aes(x = x_shifted, y = y_shifted)) +
+  stat_density_2d_filled(
+    contour_var = "density",
+    adjust = 1.2,
+    alpha = 0.9) +
+  scale_fill_viridis_d(option = "C", direction = -1, name = "Density") +
+  coord_equal() +
+  labs(
+    title = "West (Treatment)") +
+  theme_minimal(base_size = 14)
+
+
+
+# Plot the overlaid heatmap - East
+heatmap_east_cnt <- ggplot(filter(eshep_pts_east, TRT == "CNT"),
+       aes(x = x_shifted, y = y_shifted)) +
+  stat_density_2d_filled(
+    contour_var = "density",
+    adjust = 1.2,
+    alpha = 0.9) +
+  scale_fill_viridis_d(option = "C", direction = -1, name = "Density") +
+  coord_equal() +
+  labs(
+    title = "East (Control)") +
+  theme_minimal(base_size = 14)
+
+# Plot the overlaid heatmap - West
+heatmap_west_cnt <- ggplot(filter(eshep_pts_west, TRT == "CNT"),
+       aes(x = x_shifted, y = y_shifted)) +
+  stat_density_2d_filled(
+    contour_var = "density",
+    adjust = 1.2,
+    alpha = 0.9) +
+  scale_fill_viridis_d(option = "C", direction = -1, name = "Density") +
+  coord_equal() +
+  labs(
+    title = "West (Control)") +
+  theme_minimal(base_size = 14)
+
+
+
+#ggsave(filename = "heatmap_east_cnt.png",
+#       plot = heatmap_east_cnt,
+#       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
+#       dpi = 300,
+#       width = 8,
+#       height = 6,
+#       units = "in")
+
+
+
+
+#-----------Conditioned Response Extinction--------------------------
+
+extinction <- read.csv(file = "C:/Users/spsch/Documents/R/Virtual_Fence/Extinction.csv")[, 1:5]
+
+groups <- groups %>%
+  mutate(TRT = as.character(TRT))
+
+
+# Define extinction start time
+extinction_start <- mdy_hm("07/14/2025 12:00")
+
+
+# Clean extinction data: assign reentry time
+extinction_clean <- extinction %>%
+  select(Animal_ID, Group, Day, Time) %>%
+  mutate(
+    DateTime = mdy_hm(paste(Day, Time)),
+    reentered = 1) %>%
+  select(Animal_ID, Group, DateTime, reentered)
+
+
+# Join extinction records to full animal list, pulling TRT from groups only
+surv_data <- groups %>%
+  select(Animal_ID, Group, TRT) %>%
+  left_join(extinction_clean, by = c("Animal_ID", "Group")) %>%
+  mutate(
+    # Calculate time to event or assign max time if no reentry
+    time_to_reentry = as.numeric(difftime(DateTime, extinction_start, units = "mins")),
+    reentered = ifelse(is.na(reentered), 0, reentered),
+    time_to_reentry = ifelse(is.na(time_to_reentry), 1229, time_to_reentry))
+
+
+
+## Survivor model is appropriate since there is not definitive time cut-off
+
+# Fit survival model
+surv_obj <- Surv(surv_data$time_to_reentry, surv_data$reentered)
+
+
+# Fit Kaplan-Meier survival curves
+km_fit <- survfit(surv_obj ~ TRT, data = surv_data)
+
+
+# Run log-rank test (no weighting)
+logrank_test <- survdiff(Surv(time_to_reentry, reentered) ~ TRT, data = surv_data)
+
+# Run Wilcoxon (Breslow) test (weights earlier times higher)
+wilcox_test <- survdiff(Surv(time_to_reentry, reentered) ~ TRT, data = surv_data, rho = 1)
+
+
+logrank_test
+wilcox_test
+
+
+
+#--- Survivor Plot -----------------------------------
+
+surv_data <- surv_data %>%
+  mutate(
+    hours = time_to_reentry / 60,
+    time_of_day = format(mdy_hm("07/14/2025 12:00") + minutes(time_to_reentry), "%I:%M %p"))
+
+
+km_fit <- survfit(Surv(time_to_reentry, reentered) ~ TRT, data = surv_data)
+
+
+# Convert KM model to data frame
+km_df <- survminer::ggsurvplot(km_fit, data = surv_data, conf.int = FALSE)
+
+km_df <- km_df$data.survplot
+
+
+# Adjust labels and extract treatment
+km_df <- km_df %>%
+  mutate(
+    hours = time / 60,
+    time_of_day = format(mdy_hm("07/14/2025 12:00") + minutes(time), "%I:%M %p"),
+    TRT = gsub("TRT=", "", strata))
+
+# Update treatment labels
+km_df <- km_df %>%
+  mutate(Treatment = ifelse(TRT == "TRT", "Treatment", "Control"))
+
+
+
+# Plot with readable time axis and proper coloring
+survivor_plot <- ggplot(km_df, aes(x = hours, y = 1 - surv, color = Treatment)) +
+  geom_line(size = 1.2, alpha = 0.8) +
+  scale_y_continuous(
+    name = "Proportion of Animals Re-entered",
+    limits = c(0, 1),
+    expand = c(0, 0)) +
+  scale_x_continuous(
+    name = "Hours into Phase",
+    breaks = seq(0, 24, by = 2),
+    sec.axis = dup_axis(
+      breaks = seq(0, 24, by = 4),  # Choose sensible numeric breaks
+      labels = function(x) format(lubridate::mdy_hm("07/14/2025 12:00") + lubridate::hours(x), "%I %p"),
+      name = "Time of Day")) +
+  scale_color_manual(values = c("Treatment" = "darkorange", "Control" = "forestgreen")) +
+  theme_minimal(base_size = 14) +
+  labs(title = "Re-entry into Exclusion Zone by Treatment") +
+  theme(
+    legend.title = element_blank(),
+    plot.title = element_text(hjust = 0.5))
+
+
+#ggsave(filename = "survivor_plot.png",
+#       plot = survivor_plot,
+#       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
+#       dpi = 300,
+#       width = 6,
+#       height = 5,
+#       units = "in")
 
