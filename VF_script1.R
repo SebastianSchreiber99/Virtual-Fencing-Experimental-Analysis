@@ -8,9 +8,9 @@ lapply(packages_to_load, library, character.only = TRUE)
 ##-----------------------------VF Efficacy-----------------------------
 
 #-----Escapes - GLMM----
-groups <- read.csv("C:/Users/spsch/Documents/R/Virtual_Fence/Groups.csv")
+groups <- read.csv("C:/Users/spsch/Documents/R/Virtual_Fence/Raw Data/Groups.csv")
 
-esc <- read.csv(file = "C:/Users/spsch/Documents/R/Virtual_Fence/Escapes2.csv")
+esc <- read.csv(file = "C:/Users/spsch/Documents/R/Virtual_Fence/Raw Data/Escapes.csv")
 
 
 # We need to include zeros to give the model the information that escapes did not occur under those conditions. If you only analyze rows where an escape happened, the model thinks missing combinations are “unknown,” not “zero,” which (1) throws away most of your data, (2) inflates uncertainty, and (3) can easily lead to a non‑significant result even when the raw counts suggest a real difference.
@@ -116,11 +116,11 @@ p1 <- ggplot(emm_df, aes(x = Escape_Type, y = rate, fill = Escape_Type)) +
 
 
 #Read in and clean data
-eshep_full_df <- read.csv(file = "C:/Users/spsch/Documents/R/Virtual_Fence/eshep_full_df.csv")
+eshep_full_df <- read.csv(file = "C:/Users/spsch/Documents/R/Virtual_Fence/Working Data/eshep_full_df.csv")
 
-exclusion_zones <- st_read(dsn = "C:/Users/spsch/Documents/R/Virtual_Fence/Exclusion_Zones.kml")
+exclusion_zones <- st_read(dsn = "C:/Users/spsch/Documents/R/Virtual_Fence/Raw Data/KMLs/Exclusion_Zones.kml")
 
-training_VPs <- st_read(dsn = "C:/Users/spsch/Documents/R/Virtual_Fence/Training VPs.kml")
+training_VPs <- st_read(dsn = "C:/Users/spsch/Documents/R/Virtual_Fence/Raw Data/KMLs/Training VPs.kml")
 
 
 
@@ -136,7 +136,7 @@ eshep_full_sf <- st_as_sf(eshep_full_df_noNA, coords = c("longitude", "latitude"
 
 
 # Clean points outside pasture boundary with slight buffer zone
-perimeter_buffer <- st_read(dsn = "C:/Users/spsch/Documents/R/Virtual_Fence/perimeter_buffer.kml")
+perimeter_buffer <- st_read(dsn = "C:/Users/spsch/Documents/R/Virtual_Fence/Raw Data/KMLs/perimeter_buffer.kml")
 
 eshep_full_sf <- eshep_full_sf %>%
   mutate(in_perimeter = st_within(eshep_full_sf, perimeter_buffer, sparse = FALSE)[ ,1]) %>%
@@ -213,7 +213,7 @@ m2_df <- eshep_full_sf_ex %>%
 
 
 # Fit binomial GLMM
-# Animal_ID random effect was removed because it caused model singularity. Random effect estiamte for animal_ID was 2.462e-34
+# Animal_ID random effect was removed because it caused model singularity. Random effect estimate for animal_ID was 2.462e-34
 m2 <- glmmTMB(
   cbind(n_in, n_pts - n_in) ~ TRT + (1|Group) + (1|period), 
   family = binomial,
@@ -224,6 +224,16 @@ summary(m2)
 
 # gives probability inside
 emmeans(m2, pairwise ~ TRT, type = "response")
+
+
+
+sim_res <- simulateResiduals(m2, n = 1000)  # parametric sims
+plot(sim_res)                               # uniformity, QQ, residuals vs fitted
+testUniformity(sim_res)
+testDispersion(sim_res)                     # over/under-dispersion
+testZeroInflation(sim_res)                  # usually not an issue for binomial, but quick to check
+
+
 
 
 
@@ -812,10 +822,10 @@ emmeans(m3.8, pairwise ~ TRT, type = "response")
 
 #Phase 2
 #Note: this result is misleading because after the first period of phase 2, no treatment animals went near the VF
-# Thus, the this refelcts data from only the first exclusion zone trial when animals were initially adapting to the new phase
+# Thus, the this reflects data from only the first exclusion zone trial when animals were initially adapting to the new phase
 m3.8.1 <- glmmTMB(
   cbind(total_pulses, total_audios - total_pulses) ~ TRT + 
-    (1|Animal_ID), # Group rnadom effect was removed as it caused a model convergence issue (non-positive-definite Hessian matrix)
+    (1|Animal_ID), # Group random effect was removed as it caused a model convergence issue (non-positive-definite Hessian matrix)
   family = binomial,
   data = filter(phase_summary, phase == "2: Exclusion Zone Testing"))
 
@@ -1309,7 +1319,7 @@ heatmap_west_cnt <- ggplot(filter(eshep_pts_west, TRT == "CNT"),
 
 #-----------Conditioned Response Extinction--------------------------
 
-extinction <- read.csv(file = "C:/Users/spsch/Documents/R/Virtual_Fence/Extinction.csv")[, 1:5]
+extinction <- read.csv(file = "C:/Users/spsch/Documents/R/Virtual_Fence/Raw Data/Extinction.csv")[, 1:5]
 
 groups <- groups %>%
   mutate(TRT = as.character(TRT))
