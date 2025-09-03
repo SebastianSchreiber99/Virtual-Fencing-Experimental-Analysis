@@ -10,7 +10,7 @@ lapply(packages_to_load, library, character.only = TRUE)
 #-----Escapes - GLMM----
 groups <- read.csv("C:/Users/spsch/Documents/R/Virtual_Fence/Raw Data/Groups.csv")
 
-esc <- read.csv(file = "C:/Users/spsch/Documents/R/Virtual_Fence/Raw Data/Escapes.csv")
+esc <- read.csv(file = "C:/Users/spsch/Documents/R/Virtual_Fence/Working Data/Escapes2.csv")
 
 
 # We need to include zeros to give the model the information that escapes did not occur under those conditions. If you only analyze rows where an escape happened, the model thinks missing combinations are “unknown,” not “zero,” which (1) throws away most of your data, (2) inflates uncertainty, and (3) can easily lead to a non‑significant result even when the raw counts suggest a real difference.
@@ -59,39 +59,49 @@ testDispersion(sim_res)
 
 #-----Escapes - Bar plot-----
 
-# Get estimated mean rates from your model (m_pois or m_nb)
-emm <- emmeans(m1, ~ Escape_Type, type = "response")
+# Get estimated mean rates (on response scale) and convert to data frame
+emm_df <- as.data.frame(emmeans(m1, ~ Escape_Type, type = "response"))
 
-emm_df <- as.data.frame(emm) %>%
-  mutate(
-    SE = SE,                # Standard Error
-    ymin = rate - SE,   # Lower error bar
-    ymax = rate + SE)    # Upper error bar
+# Plot: Dot plot with error bars and log scale
+# First, ensure Escape_Type is a factor with the correct order
+emm_df$Escape_Type <- factor(emm_df$Escape_Type, levels = c("Electric", "Virtual"))
 
-
-
-# Plot
-p1 <- ggplot(emm_df, aes(x = Escape_Type, y = rate, fill = Escape_Type)) +
-  geom_col(width = 0.6, color = "black") +
-  geom_errorbar(aes(ymin = ymin, ymax = ymax), width = 0.2) +
+# Plot with bracket and asterisk
+p1 <- ggplot(emm_df, aes(x = Escape_Type, y = rate, color = Escape_Type)) +
+  geom_point(size = 6) +
+  geom_errorbar(aes(ymin = asymp.LCL, ymax = asymp.UCL), width = 0.1) +
+  scale_y_log10(
+    name = "EMM Escape Rate (escapes per animal-day)",
+    breaks = c(0.001, 0.01, 0.1, 1),
+    labels = scales::label_number(accuracy = 0.001)
+  ) +
+  scale_color_manual(values = c("Electric" = "firebrick", "Virtual" = "steelblue")) +
+  
+  # Bracket-style annotation
+  geom_segment(aes(x = 1, xend = 1, y = 2.2, yend = 2.5), color = "black") +  # left leg
+  geom_segment(aes(x = 2, xend = 2, y = 2.2, yend = 2.5), color = "black") +  # right leg
+  geom_segment(aes(x = 1, xend = 2, y = 2.5, yend = 2.5), color = "black") +  # top line
+  annotate("text", x = 1.5, y = 2.6, label = "***", size = 8) +                # asterisk above
+  
   labs(
     x = "Fence Type",
-    y = "Estimated Escape Rate (escapes per animal-day)",
     title = "Escapes by Fence Type"
   ) +
-  scale_fill_manual(values = c("Electric" = "firebrick", "Virtual" = "steelblue")) +
   theme_minimal(base_size = 14) +
-  theme(legend.position = "none",
-        plot.title = element_text(hjust = 0.4))
+  theme(
+    legend.position = "none",
+    plot.title = element_text(hjust = 0.5)
+  )
 
 
-#ggsave(filename = "Escapes.png",
-#       plot = p1,
-#       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
-#       dpi = 300,
-#       width = 5,
-#       height = 5,
-#       units = "in")
+
+ggsave(filename = "EscapesLog.png",
+       plot = p1,
+       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
+       dpi = 600,
+       width = 4,
+       height = 6,
+       units = "in")
 
 
 
@@ -212,6 +222,7 @@ m2_df <- eshep_full_sf_ex %>%
   select(!last_col())
 
 
+
 # Fit binomial GLMM
 # Animal_ID random effect was removed because it caused model singularity. Random effect estimate for animal_ID was 2.462e-34
 m2 <- glmmTMB(
@@ -246,30 +257,41 @@ emm_df <- as.data.frame(emm2) %>%
   ) %>%
   mutate(treatment = ifelse(TRT == "CNT", "Control", "Treatment"))
 
+
+
 p2 <- ggplot(emm_df, aes(x = treatment, y = prob, fill = treatment)) +
   geom_col(width = 0.6, color = "black") +
-  geom_errorbar(aes(ymin = ymin, ymax = ymax), width = 0.2) +
+  geom_errorbar(aes(ymin = ymin, ymax = ymax), width = 0.2, linetype = "dashed") +
+  
+  # Bracket-style significance annotation
+  geom_segment(aes(x = 1, xend = 1, y = 1.0005, yend = 1.005), color = "black") +  # left leg
+  geom_segment(aes(x = 2, xend = 2, y = 1.0005, yend = 1.005), color = "black") +  # right leg
+  geom_segment(aes(x = 1, xend = 2, y = 1.005, yend = 1.005), color = "black") +   # top line
+  annotate("text", x = 1.5, y = 1.006, label = "*", size = 8) +                   # asterisk
+  
   labs(
     x = element_blank(),
-    y = "% Points Inside Virtual Boundary",
-    title = "Virtual Fence Efficacy by Treatment") +
+    y = "EMM % Points Inside Virtual Boundary",
+    title = "Virtual Fence Efficacy by Treatment"
+  ) +
   scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
-  coord_cartesian(ylim = c(0.90, 1)) +
+  coord_cartesian(ylim = c(0.90, 1.004)) +
   theme_minimal(base_size = 14) +
   theme(
     legend.position = "none",
-    plot.title = element_text(hjust = 0.5)) +
+    plot.title = element_text(hjust = 0.5)
+  ) +
   scale_fill_manual(values = c("forestgreen", "darkorange"))
 
 
 
-#ggsave(filename = "Efficacy.png",
-#      plot = p2,
-#       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
-#       dpi = 300,
-#       width = 5,
-#       height = 5,
-#       units = "in")
+ggsave(filename = "Efficacy.png",
+      plot = p2,
+       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
+       dpi = 600,
+       width = 5,
+       height = 5,
+       units = "in")
 
 
 
@@ -278,7 +300,7 @@ p2 <- ggplot(emm_df, aes(x = treatment, y = prob, fill = treatment)) +
 # Remove any points with cues that are not near VF
 
 # Read in shapefile for buffer zones
-buffers <- st_read(dsn = "C:/Users/spsch/Documents/R/Virtual_Fence/Buffers.kml")
+buffers <- st_read(dsn = "C:/Users/spsch/Documents/R/Virtual_Fence/Raw Data/KMLs/Buffers.kml")
 
 # Only keep points associated with cues
 eshep_cues_sf_ex <- eshep_full_sf_ex %>%
@@ -463,7 +485,7 @@ p3 <- ggplot(cue_summary, aes(x = hour_bin, y = total_cues,
  # geom_point(size = 2) +
   geom_smooth(method = "loess", se = FALSE, linewidth = 1.2, span = .7) +
   labs(
-    title = "Cues by Hour (smoothed)",
+    title = "VF Interactions by Hour (smoothed)",
     x = "Hour of Period",
     y = "Cues per Animal per Hour",
     color = "Treatment",
@@ -485,7 +507,7 @@ p3 <- ggplot(cue_summary, aes(x = hour_bin, y = total_cues,
 #ggsave(filename = "Cues_by_hour.png",
 #       plot = p3,
 #       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
-#       dpi = 300,
+#       dpi = 600,
 #       width = 6,
 #       height = 4,
 #       units = "in")
@@ -517,7 +539,7 @@ hour_breaks <- seq(0, 24, by = 4)
 p4 <- ggplot(escalation_summary, aes(x = hour_bin, y = mean_prob, color = treatment, group = treatment)) +
   geom_smooth(method = "loess", se = FALSE, linewidth = 1.2, span = 0.75) +
   labs(
-    title = "Smoothed Probability of Escalation",
+    title = "Responsiveness by Hour (smoothed)",
     x = "Hour of Period",
     y = "Probability Pulse Follows Audio",
     color = "Treatment"
@@ -535,10 +557,10 @@ p4 <- ggplot(escalation_summary, aes(x = hour_bin, y = mean_prob, color = treatm
         legend.title = element_blank())
 
 
-#ggsave(filename = "Escalation_hour.png",
+#ggsave(filename = "Responsiveness_hour.png",
 #       plot = p4,
 #       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
-#       dpi = 300,
+#       dpi = 600,
 #       width = 6,
 #       height = 4,
 #       units = "in")
@@ -649,7 +671,7 @@ p5 <- ggplot(cue_period_long, aes(x = period, y = count,
                             group = interaction(cue_type, treatment))) +
   geom_smooth(method = "loess", se = FALSE, linewidth = 1.2, span = 0.4) +
   labs(
-    title = "Cues by Period (smoothed)",
+    title = "VF Interactions by Period (smoothed)",
     x = "Period (chronological)",
     y = "Cues per Animal per Period",
     color = "Treatment",
@@ -668,7 +690,7 @@ p5 <- ggplot(cue_period_long, aes(x = period, y = count,
 #ggsave(filename = "Cues_by_period.png",
 #       plot = p5,
 #       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
-#       dpi = 300,
+#       dpi = 600,
 #       width = 6,
 #       height = 4,
 #       units = "in")
@@ -696,11 +718,11 @@ escalation_summary2$period <- factor(escalation_summary2$period,
                                  
 
 
-# Escalation by hour
+# Escalation by period
 p6 <- ggplot(escalation_summary2, aes(x = period, y = mean_prob, color = treatment, group = treatment)) +
   geom_smooth(method = "loess", se = FALSE, size = 1.2, span = 0.6) +
   labs(
-    title = "Probability of Escalation (smoothed)",
+    title = "Responsiveness by Period (smoothed)",
     x = "Period (Chronological)",
     y = "Probability Pulse Follows Audio",
     color = "Treatment"
@@ -713,10 +735,10 @@ p6 <- ggplot(escalation_summary2, aes(x = period, y = mean_prob, color = treatme
         axis.text.x = element_text(angle = 45, hjust = 1))
 
 
-#ggsave(filename = "Escalation_period.png",
+#ggsave(filename = "Responsiveness_period.png",
 #       plot = p6,
 #       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
-#       dpi = 300,
+#       dpi = 600,
 #       width = 6,
 #       height = 4,
 #       units = "in")
@@ -866,12 +888,12 @@ plot_df <- phase_long %>%
 p7 <- ggplot(plot_df, aes(x = cue_type, y = mean_count, fill = treatment)) +
   geom_col(position = position_dodge(width = 0.8), width = 0.7, color = "black") +
   geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper),
-                position = position_dodge(width = 0.8), width = 0.2) +
+                position = position_dodge(width = 0.8), width = 0.2, linetype = "dashed") +
   facet_wrap(~ phase) +
   labs(
-    title = "Cue Counts by Treatment",
+    title = "VF Interactions by Phase",
     x = "Cue Type",
-    y = "Mean Cues per Animal",
+    y = "EMM Cues per Animal",
     fill = "Treatment"
   ) +
   scale_fill_manual(values = c("Control" = "forestgreen", "Treatment" = "darkorange")) +
@@ -882,14 +904,69 @@ p7 <- ggplot(plot_df, aes(x = cue_type, y = mean_count, fill = treatment)) +
     legend.title = element_blank(),
     panel.spacing = unit(2, "lines"))
 
+p7 <- p7 +
+  # Phase 1 - Audio
+  geom_segment(data = data.frame(phase = "1: Training"),
+               aes(x = 0.8, xend = 0.8, y = 10.7, yend = 10.5),
+               inherit.aes = FALSE) +
+  geom_segment(data = data.frame(phase = "1: Training"),
+               aes(x = 1.2, xend = 1.2, y = 10.7, yend = 10.5),
+               inherit.aes = FALSE) +
+  geom_segment(data = data.frame(phase = "1: Training"),
+               aes(x = 0.8, xend = 1.2, y = 10.7, yend = 10.7),
+               inherit.aes = FALSE) +
+  geom_text(data = data.frame(x = 1, y = 10.9, label = "**", phase = "1: Training"),
+            aes(x = x, y = y, label = label), size = 6, inherit.aes = FALSE) +
+  
+  # Phase 1 - Pulses
+  geom_segment(data = data.frame(phase = "1: Training"),
+               aes(x = 1.8, xend = 1.8, y = 10.7, yend = 10.5),
+               inherit.aes = FALSE) +
+  geom_segment(data = data.frame(phase = "1: Training"),
+               aes(x = 2.2, xend = 2.2, y = 10.7, yend = 10.5),
+               inherit.aes = FALSE) +
+  geom_segment(data = data.frame(phase = "1: Training"),
+               aes(x = 1.8, xend = 2.2, y = 10.7, yend = 10.7),
+               inherit.aes = FALSE) +
+  geom_text(data = data.frame(x = 2, y = 10.9, label = "*", phase = "1: Training"),
+            aes(x = x, y = y, label = label), size = 6, inherit.aes = FALSE) +
+  
+  # Phase 2 - Audio
+  geom_segment(data = data.frame(phase = "2: Exclusion Zone Testing"),
+               aes(x = 0.8, xend = 0.8, y = 10.7, yend = 10.5),
+               inherit.aes = FALSE) +
+  geom_segment(data = data.frame(phase = "2: Exclusion Zone Testing"),
+               aes(x = 1.2, xend = 1.2, y = 10.7, yend = 10.5),
+               inherit.aes = FALSE) +
+  geom_segment(data = data.frame(phase = "2: Exclusion Zone Testing"),
+               aes(x = 0.8, xend = 1.2, y = 10.7, yend = 10.7),
+               inherit.aes = FALSE) +
+  geom_text(data = data.frame(x = 1, y = 10.9, label = "NS", phase = "2: Exclusion Zone Testing"),
+            aes(x = x, y = y, label = label), size = 3, inherit.aes = FALSE) +
+  
+  # Phase 2 - Pulses
+  geom_segment(data = data.frame(phase = "2: Exclusion Zone Testing"),
+               aes(x = 1.8, xend = 1.8, y = 10.7, yend = 10.5),
+               inherit.aes = FALSE) +
+  geom_segment(data = data.frame(phase = "2: Exclusion Zone Testing"),
+               aes(x = 2.2, xend = 2.2, y = 10.7, yend = 10.5),
+               inherit.aes = FALSE) +
+  geom_segment(data = data.frame(phase = "2: Exclusion Zone Testing"),
+               aes(x = 1.8, xend = 2.2, y = 10.7, yend = 10.7),
+               inherit.aes = FALSE) +
+  geom_text(data = data.frame(x = 2, y = 10.9, label = "NS", phase = "2: Exclusion Zone Testing"),
+            aes(x = x, y = y, label = label), size = 3, inherit.aes = FALSE)
 
-#ggsave(filename = "Cue_Counts_phase.png",
-#       plot = p7,
-#       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
-#       dpi = 300,
-#       width = 7,
-#       height = 5,
-#       units = "in")
+
+
+
+ggsave(filename = "Cue_Counts_phase.png",
+       plot = p7,
+       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
+       dpi = 600,
+       width = 7,
+       height = 5,
+       units = "in")
 
 
 
@@ -918,11 +995,11 @@ emm_combined <- bind_rows(emm1.1, emm2.1) %>%
 p8 <- ggplot(emm_combined, aes(x = phase, y = prob, fill = treatment)) +
   geom_col(position = position_dodge(width = 0.7), width = 0.6, color = "black") +
   geom_errorbar(aes(ymin = lower, ymax = upper),
-                position = position_dodge(width = 0.7), width = 0.2) +
+                position = position_dodge(width = 0.7), width = 0.2, linetype = "dashed") +
   labs(
-    title = "Probability of Escalation",
+    title = "Responsiveness by Phase",
     x = "Phase",
-    y = "Mean Probability Pulse Follows Audio",
+    y = "EMM Probability Pulse Follows Audio",
     fill = "Treatment"
   ) +
   scale_y_continuous(labels = scales::percent_format(accuracy = 1), limits = c(0, 1)) +
@@ -933,13 +1010,31 @@ p8 <- ggplot(emm_combined, aes(x = phase, y = prob, fill = treatment)) +
     legend.title = element_blank())
 
 
-#ggsave(filename = "Escalation_phase.png",
-#       plot = p8,
-#       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
-#       dpi = 300,
-#       width = 6,
-#       height = 5,
-#       units = "in")
+p8 <- p8 +
+  # Phase 1 (non-significant)
+  geom_segment(aes(x = 1 - 0.2, xend = 1 - 0.2, y = 1.01, yend = 0.95), inherit.aes = FALSE) +  # left leg
+  geom_segment(aes(x = 1 + 0.2, xend = 1 + 0.2, y = 1.01, yend = 0.95), inherit.aes = FALSE) +  # right leg
+  geom_segment(aes(x = 1 - 0.2, xend = 1 + 0.2, y = 1.01, yend = 1.01), inherit.aes = FALSE) +  # top bar
+  annotate("text", x = 1, y = 1.04, label = "NS", size = 4) +
+  
+  # Phase 2 (significant)
+  geom_segment(aes(x = 2 - 0.2, xend = 2 - 0.2, y = 1.01, yend = 0.95), inherit.aes = FALSE) +  # left leg
+  geom_segment(aes(x = 2 + 0.2, xend = 2 + 0.2, y = 1.01, yend = 0.95), inherit.aes = FALSE) +  # right leg
+  geom_segment(aes(x = 2 - 0.2, xend = 2 + 0.2, y = 1.01, yend = 1.01), inherit.aes = FALSE) +  # top bar
+  annotate("text", x = 2, y = 1.03, label = "**", size = 6) +
+  
+  # Adjust y-axis to prevent clipping
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1), limits = c(0, 1.05))
+
+
+
+ggsave(filename = "Responsiveness_phase.png",
+       plot = p8,
+       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
+       dpi = 600,
+       width = 6,
+       height = 5,
+       units = "in")
 
 
 
@@ -950,9 +1045,9 @@ p8 <- ggplot(emm_combined, aes(x = phase, y = prob, fill = treatment)) +
 #This is done on training phase only to avoid spatial-visual markers given the possible association between the hay bale and the VF for control groups. Visual cues during the exclusion zone phase function less to show fence location and more to signial which fence is active.
 
 #Read in and clean data
-exclusion_zones <- st_read(dsn = "C:/Users/spsch/Documents/R/Virtual_Fence/Exclusion_Zones.kml")
+exclusion_zones <- st_read(dsn = "C:/Users/spsch/Documents/R/Virtual_Fence/Raw Data/KMLs/Exclusion_Zones.kml")
 
-fencelines <- st_read(dsn = "C:/Users/spsch/Documents/R/Virtual_Fence/Fencelines.kml")
+fencelines <- st_read(dsn = "C:/Users/spsch/Documents/R/Virtual_Fence/Raw Data/KMLs/Fencelines.kml")
 
 exclusion_zones$Description <- c("west", "east", "east", "east", "east", "east",
                                  "east", "west", "west", "west", "west", "west")
@@ -1042,10 +1137,10 @@ summary_df <- points_within_10m_summary %>%
 # Plot
 p9 <- ggplot(summary_df, aes(x = treatment, y = mean_points, fill = treatment)) +
   geom_col(width = 0.6, color = "black") +
-  geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper), width = 0.2) +
+  geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper), width = 0.2, linetype = "dashed") +
   labs(
-    title = "Proximity to Virtual Fence during Training",
-    y = "Mean Points within 10m of VF per Period",
+    title = "Proximity to Virtual Boundary",
+    y = "EMM Points within 10m of VF per Period",
     x = element_blank()
   ) +
   theme_minimal(base_size = 14) +
@@ -1053,15 +1148,27 @@ p9 <- ggplot(summary_df, aes(x = treatment, y = mean_points, fill = treatment)) 
     plot.title = element_text(hjust = 0.4),
     legend.position = "none") +
   scale_fill_manual(values = c("Control" = "forestgreen", "Treatment" = "darkorange"))
+
+# Plot with significance annotation
+p9 <- p9 +
+  # Left bracket leg
+  geom_segment(aes(x = 1, xend = 1, y = 6.4, yend = 6.2), inherit.aes = FALSE) +
+  # Right bracket leg
+  geom_segment(aes(x = 2, xend = 2, y = 6.4, yend = 6.2), inherit.aes = FALSE) +
+  # Top bracket bar
+  geom_segment(aes(x = 1, xend = 2, y = 6.4, yend = 6.4), inherit.aes = FALSE) +
+  # Significance text
+  annotate("text", x = 1.5, y = 6.5, label = "*", size = 6)
+
   
 
-#ggsave(filename = "Points_within_10m.png",
-#       plot = p9,
-#       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
-#       dpi = 300,
-#       width = 5,
-#       height = 5,
-#       units = "in")
+ggsave(filename = "Points_within_10m.png",
+       plot = p9,
+       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
+       dpi = 600,
+       width = 5,
+       height = 5,
+       units = "in")
 
 
 
@@ -1158,7 +1265,7 @@ p10 <- ggplot(plot10_summary, aes(x = hour_bin, y = mean_points, color = treatme
   labs(
     title = "Use of 'Open' Hay Bale (smoothed)",
     x = "Hour of Period",
-    y = "Points Inside 'Open' Hay Bale (per Animal)",
+    y = "Points within 'Open' E.Z. per Animal",
     color = "Treatment"
   ) +
   scale_color_manual(values = c("Treatment" = "darkorange", "Control" = "forestgreen")) +
@@ -1175,13 +1282,13 @@ p10 <- ggplot(plot10_summary, aes(x = hour_bin, y = mean_points, color = treatme
 
 
 
-#ggsave(filename = "Open_hay_bale_use.png",
-#       plot = p10,
-#       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
-#       dpi = 300,
-#       width = 6,
-#       height = 4,
-#       units = "in")
+ggsave(filename = "Open_hay_bale_use.png",
+       plot = p10,
+       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
+       dpi = 600,
+       width = 6,
+       height = 4,
+       units = "in")
 
 
 #-----------------Heatmaps for hay bale use-----------------
