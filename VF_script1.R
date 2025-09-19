@@ -272,7 +272,7 @@ p2 <- ggplot(emm_df, aes(x = treatment, y = prob, fill = treatment)) +
   labs(
     x = element_blank(),
     y = "EMM % Points Inside Virtual Boundary",
-    title = "Virtual Fence Efficacy by Treatment"
+    title = "Virtual Fence Effectiveness by Treatment"
   ) +
   scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
   coord_cartesian(ylim = c(0.90, 1.004)) +
