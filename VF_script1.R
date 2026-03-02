@@ -425,7 +425,7 @@ emmeans(m3.1, pairwise ~ TRT, type = "response")
 #This model structure treats each hour (or bin) as an opportunity to observe that escalation rate.
 
 m3.2 <- glmmTMB(
-  cbind(total_pulses, total_audios - total_pulses) ~ hour_bin * TRT + 
+  cbind(total_audios - total_pulses, total_pulses) ~ hour_bin * TRT + 
     (1|Animal_ID) + (1|Group) + (1|period),
   family = binomial,
   data = hour_summary)
@@ -515,46 +515,54 @@ p3 <- ggplot(cue_summary, aes(x = hour_bin, y = total_cues,
 
 
 
-
-escalation_summary <- hour_summary %>%
+responsiveness_summary <- hour_summary %>%
   mutate(
-    prob_escalation = total_pulses / total_audios) %>%
+    # responsiveness = P(no pulse | audio)
+    prob_responsive = if_else(total_audios > 0,
+                              (total_audios - total_pulses) / total_audios,
+                              NA_real_)
+  ) %>%
   group_by(hour_bin, TRT) %>%
   summarise(
-    mean_prob = mean(prob_escalation, na.rm = TRUE),
-    se = sd(prob_escalation, na.rm = TRUE) / sqrt(n()),
-    .groups = "drop") %>%
+    mean_prob = mean(prob_responsive, na.rm = TRUE),
+    se = sd(prob_responsive, na.rm = TRUE) / sqrt(sum(!is.na(prob_responsive))),
+    .groups = "drop"
+  ) %>%
   mutate(
     ymin = pmax(0, mean_prob - se),
-    ymax = pmin(1, mean_prob + se)) %>%
-  mutate(treatment = ifelse(TRT == "TRT", "Treatment", "Control"))
+    ymax = pmin(1, mean_prob + se),
+    treatment = ifelse(TRT == "TRT", "Treatment", "Control")
+  )
 
-# Map hour bins (0–12) to time labels (12 PM to 12 AM)
+# Map hour bins to time labels
 hour_labels <- c("12 PM", "4 PM", "8 PM", "12 AM", "4 AM", "8 AM", "12 PM")
 hour_breaks <- seq(0, 24, by = 4)
 
-
- 
-# Escalation by hour
-p4 <- ggplot(escalation_summary, aes(x = hour_bin, y = mean_prob, color = treatment, group = treatment)) +
+# Responsiveness by hour
+p4 <- ggplot(responsiveness_summary,
+             aes(x = hour_bin, y = mean_prob, color = treatment, group = treatment)) +
   geom_smooth(method = "loess", se = FALSE, linewidth = 1.2, span = 0.75) +
   labs(
     title = "Responsiveness by Hour (smoothed)",
     x = "Hour of Period",
-    y = "Probability Pulse Follows Audio",
+    y = "Success Ratio",
     color = "Treatment"
   ) +
   scale_color_manual(values = c("Treatment" = "darkorange", "Control" = "forestgreen")) +
-  scale_y_continuous(labels = scales::percent_format(accuracy = 1), limits = c(0, 1)) +
+  scale_y_continuous(limits = c(0, 1)) +
   scale_x_continuous(
     breaks = hour_breaks,
     sec.axis = dup_axis(
       breaks = hour_breaks,
       labels = hour_labels,
-      name = "Time of Day")) +
+      name = "Time of Day"
+    )
+  ) +
   theme_minimal(base_size = 14) +
-  theme(plot.title = element_text(hjust = 0.5),
-        legend.title = element_blank())
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    legend.title = element_blank()
+  )
 
 
 #ggsave(filename = "Responsiveness_hour.png",
@@ -632,7 +640,7 @@ emmeans(m3.4, pairwise ~ TRT, type = "response")
 
 # Fit binomial GLMM
 m3.5 <- glmmTMB(
-  cbind(total_pulses, total_audios - total_pulses) ~ day * TRT + 
+  cbind(total_audios - total_pulses, total_pulses) ~ day * TRT + 
     (1|Animal_ID) + (1|Group),
   family = binomial,
   data = period_summary)
@@ -700,35 +708,37 @@ p5 <- ggplot(cue_period_long, aes(x = period, y = count,
 
 
 
-escalation_summary2 <- period_summary %>%
+responsiveness_summary2 <- period_summary %>%
   mutate(
-    prob_escalation = total_pulses / total_audios) %>%
+    prob_responsive = if_else(total_audios > 0,
+                              (total_audios - total_pulses) / total_audios,
+                              NA_real_)) %>%
   group_by(period, TRT) %>%
   summarise(
-    mean_prob = mean(prob_escalation, na.rm = TRUE),
-    se = sd(prob_escalation, na.rm = TRUE) / sqrt(n()),
+    mean_prob = mean(prob_responsive, na.rm = TRUE),
+    se = sd(prob_responsive, na.rm = TRUE) / sqrt(sum(!is.na(prob_responsive))),
     .groups = "drop") %>%
   mutate(
     ymin = pmax(0, mean_prob - se),
     ymax = pmin(1, mean_prob + se)) %>%
   mutate(treatment = ifelse(TRT == "TRT", "Treatment", "Control"))
 
-escalation_summary2$period <- factor(escalation_summary2$period,
+responsiveness_summary2$period <- factor(responsiveness_summary2$period,
                                      levels = c("Tr1", "Tr2", "Tr3", "E1", "W1", "E2", "W2"))
                                  
 
 
 # Escalation by period
-p6 <- ggplot(escalation_summary2, aes(x = period, y = mean_prob, color = treatment, group = treatment)) +
+p6 <- ggplot(responsiveness_summary2, aes(x = period, y = mean_prob, color = treatment, group = treatment)) +
   geom_smooth(method = "loess", se = FALSE, size = 1.2, span = 0.6) +
   labs(
     title = "Responsiveness by Period (smoothed)",
     x = "Period (Chronological)",
-    y = "Probability Pulse Follows Audio",
+    y = "Success Ratio",
     color = "Treatment"
   ) +
   scale_color_manual(values = c("Treatment" = "darkorange", "Control" = "forestgreen")) +
-  scale_y_continuous(labels = scales::percent_format(accuracy = 1), limits = c(0, 1)) +
+  scale_y_continuous(limits = c(0, 1)) +
   theme_minimal(base_size = 14) +
   theme(plot.title = element_text(hjust = 0.5),
         legend.title = element_blank(),
@@ -831,7 +841,7 @@ emmeans(m3.7.1, pairwise ~ TRT, type = "response")
 
 #Phase 1
 m3.8 <- glmmTMB(
-  cbind(total_pulses, total_audios - total_pulses) ~ TRT + 
+  cbind(total_audios - total_pulses, total_pulses) ~ TRT + 
     (1|Animal_ID) + (1|Group),
   family = binomial,
   data = filter(phase_summary, phase == "1: Training"))
@@ -846,7 +856,7 @@ emmeans(m3.8, pairwise ~ TRT, type = "response")
 #Note: this result is misleading because after the first period of phase 2, no treatment animals went near the VF
 # Thus, the this reflects data from only the first exclusion zone trial when animals were initially adapting to the new phase
 m3.8.1 <- glmmTMB(
-  cbind(total_pulses, total_audios - total_pulses) ~ TRT + 
+  cbind(total_audios - total_pulses, total_pulses) ~ TRT + 
     (1|Animal_ID), # Group random effect was removed as it caused a model convergence issue (non-positive-definite Hessian matrix)
   family = binomial,
   data = filter(phase_summary, phase == "2: Exclusion Zone Testing"))
@@ -888,7 +898,7 @@ plot_df <- phase_long %>%
 p7 <- ggplot(plot_df, aes(x = cue_type, y = mean_count, fill = treatment)) +
   geom_col(position = position_dodge(width = 0.8), width = 0.7, color = "black") +
   geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper),
-                position = position_dodge(width = 0.8), width = 0.2, linetype = "dashed") +
+                position = position_dodge(width = 0.8), width = 0.4, linetype = "dashed") +
   facet_wrap(~ phase) +
   labs(
     title = "VF Interactions by Phase",
@@ -960,13 +970,13 @@ p7 <- p7 +
 
 
 
-ggsave(filename = "Cue_Counts_phase.png",
-       plot = p7,
-       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
-       dpi = 600,
-       width = 7,
-       height = 5,
-       units = "in")
+#ggsave(filename = "Cue_Counts_phase_Error_bar_fixed.png",
+#       plot = p7,
+#       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
+#       dpi = 600,
+#       width = 7,
+#       height = 5,
+#       units = "in")
 
 
 
@@ -999,10 +1009,10 @@ p8 <- ggplot(emm_combined, aes(x = phase, y = prob, fill = treatment)) +
   labs(
     title = "Responsiveness by Phase",
     x = "Phase",
-    y = "EMM Probability Pulse Follows Audio",
+    y = "EMM Success Ratio",
     fill = "Treatment"
   ) +
-  scale_y_continuous(labels = scales::percent_format(accuracy = 1), limits = c(0, 1)) +
+  scale_y_continuous(limits = c(0, 1)) +
   scale_fill_manual(values = c("Control" = "forestgreen", "Treatment" = "darkorange")) +
   theme_minimal(base_size = 14) +
   theme(
@@ -1012,29 +1022,29 @@ p8 <- ggplot(emm_combined, aes(x = phase, y = prob, fill = treatment)) +
 
 p8 <- p8 +
   # Phase 1 (non-significant)
-  geom_segment(aes(x = 1 - 0.2, xend = 1 - 0.2, y = 1.01, yend = 0.95), inherit.aes = FALSE) +  # left leg
-  geom_segment(aes(x = 1 + 0.2, xend = 1 + 0.2, y = 1.01, yend = 0.95), inherit.aes = FALSE) +  # right leg
-  geom_segment(aes(x = 1 - 0.2, xend = 1 + 0.2, y = 1.01, yend = 1.01), inherit.aes = FALSE) +  # top bar
-  annotate("text", x = 1, y = 1.04, label = "NS", size = 4) +
+  geom_segment(aes(x = 1 - 0.2, xend = 1 - 0.2, y = 1.05, yend = 1), inherit.aes = FALSE) +  # left leg
+  geom_segment(aes(x = 1 + 0.2, xend = 1 + 0.2, y = 1.05, yend = 1), inherit.aes = FALSE) +  # right leg
+  geom_segment(aes(x = 1 - 0.2, xend = 1 + 0.2, y = 1.05, yend = 1.05), inherit.aes = FALSE) +  # top bar
+  annotate("text", x = 1, y = 1.08, label = "NS", size = 4) +
   
   # Phase 2 (significant)
-  geom_segment(aes(x = 2 - 0.2, xend = 2 - 0.2, y = 1.01, yend = 0.95), inherit.aes = FALSE) +  # left leg
-  geom_segment(aes(x = 2 + 0.2, xend = 2 + 0.2, y = 1.01, yend = 0.95), inherit.aes = FALSE) +  # right leg
-  geom_segment(aes(x = 2 - 0.2, xend = 2 + 0.2, y = 1.01, yend = 1.01), inherit.aes = FALSE) +  # top bar
-  annotate("text", x = 2, y = 1.03, label = "**", size = 6) +
+  geom_segment(aes(x = 2 - 0.2, xend = 2 - 0.2, y = 1.05, yend = 1), inherit.aes = FALSE) +  # left leg
+  geom_segment(aes(x = 2 + 0.2, xend = 2 + 0.2, y = 1.05, yend = 1), inherit.aes = FALSE) +  # right leg
+  geom_segment(aes(x = 2 - 0.2, xend = 2 + 0.2, y = 1.05, yend = 1.05), inherit.aes = FALSE) +  # top bar
+  annotate("text", x = 2, y = 1.07, label = "**", size = 6) +
   
   # Adjust y-axis to prevent clipping
-  scale_y_continuous(labels = scales::percent_format(accuracy = 1), limits = c(0, 1.05))
+  scale_y_continuous(limits = c(0, 1.1), breaks = c(0, 0.2, 0.4, 0.6, 0.8, 1.0))
 
 
 
-ggsave(filename = "Responsiveness_phase.png",
-       plot = p8,
-       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
-       dpi = 600,
-       width = 6,
-       height = 5,
-       units = "in")
+#ggsave(filename = "Responsiveness_phase.png",
+#       plot = p8,
+#       path = "C:/Users/spsch/Documents/R/Virtual_Fence/Results",
+#       dpi = 600,
+#       width = 6,
+#       height = 5,
+#       units = "in")
 
 
 
