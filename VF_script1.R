@@ -114,7 +114,7 @@ ggsave(filename = "EscapesLog.png",
 
 
 
-#-----Effectiveness: Percentage Points In/Out-----
+###-----Effectiveness: Percentage Points In/Out-----
 
 #eshep_df1 <- read.csv(file = "C:/Users/Sebastian/Documents/R/Virtual_Fence/2025-07-13.csv")
 #eshep_df2 <- read.csv(file = "C:/Users/Sebastian/Documents/R/Virtual_Fence/2025-07-20.csv")
@@ -131,111 +131,166 @@ ggsave(filename = "EscapesLog.png",
 
 
 
-#Read in and clean data
-eshep_full_df <- read.csv(file = "C:/Users/Sebastian/Documents/R/Virtual_Fence/Working Data/eshep_full_df.csv")
+#Read in and clean data-----------------------
 
-exclusion_zones <- st_read(dsn = "C:/Users/Sebastian/Documents/R/Virtual_Fence/Raw Data/KMLs/Exclusion_Zones.kml")
+# Read in data
+eshep_full_df <- read.csv(
+  "C:/Users/Sebastian/Documents/R/Virtual_Fence/Working Data/eshep_full_df.csv")
 
-training_VPs <- st_read(dsn = "C:/Users/Sebastian/Documents/R/Virtual_Fence/Raw Data/KMLs/Training VPs.kml")
+exclusion_zones <- st_read(
+  "C:/Users/Sebastian/Documents/R/Virtual_Fence/Raw Data/KMLs/Exclusion_Zones.kml")
+
+training_VPs <- st_read(
+  "C:/Users/Sebastian/Documents/R/Virtual_Fence/Raw Data/KMLs/Training VPs.kml")
+
+perimeter_buffer <- st_read(
+  "C:/Users/Sebastian/Documents/R/Virtual_Fence/Raw Data/KMLs/perimeter_buffer.kml")
+
+# Projected CRS in meters
+target_crs <- 32612
+
+exclusion_zones <- st_transform(exclusion_zones, target_crs)
+training_VPs <- st_transform(training_VPs, target_crs)
+perimeter_buffer <- st_transform(perimeter_buffer, target_crs)
+
+exclusion_zones$Description <- c(
+  "west", "east", "east", "east", "east", "east",
+  "east", "west", "west", "west", "west", "west")
 
 
-
-exclusion_zones$Description <- c("west", "east", "east", "east", "east", "east",
-                                 "east", "west", "west", "west", "west", "west")
-
+# Remove missing GPS fixes
 eshep_full_df_noNA <- eshep_full_df %>%
-  na.omit(latitude) %>%
-  na.omit(longitude)
+  filter(!is.na(latitude), !is.na(longitude))
 
-# Convert df to spatial points object
-eshep_full_sf <- st_as_sf(eshep_full_df_noNA, coords = c("longitude", "latitude"), crs = crs(training_VPs))
+# Convert GPS to sf
+# IMPORTANT: longitude/latitude are EPSG 4326 before transforming
+eshep_full_sf <- st_as_sf(
+  eshep_full_df_noNA,
+  coords = c("longitude", "latitude"),
+  crs = 4326) %>%
+  st_transform(target_crs) %>%
+  mutate(
+    Time..UTC. = ymd_hms(Time..UTC.),
+    period = case_when(
+      Time..UTC. <= ymd_hms("2025-07-08 11:59:59") ~ "Tr1",
+      Time..UTC. <= ymd_hms("2025-07-09 11:59:59") ~ "Tr2",
+      Time..UTC. <= ymd_hms("2025-07-10 11:59:59") ~ "Tr3",
+      Time..UTC. <= ymd_hms("2025-07-11 11:59:59") ~ "E1",
+      Time..UTC. <= ymd_hms("2025-07-12 11:59:59") ~ "W1",
+      Time..UTC. <= ymd_hms("2025-07-13 11:59:59") ~ "E2",
+      Time..UTC. <= ymd_hms("2025-07-14 12:00:00") ~ "W2",
+      TRUE ~ NA_character_))
 
-
-# Clean points outside pasture boundary with slight buffer zone
-perimeter_buffer <- st_read(dsn = "C:/Users/Sebastian/Documents/R/Virtual_Fence/Raw Data/KMLs/perimeter_buffer.kml")
-
+# Keep only points inside perimeter
 eshep_full_sf <- eshep_full_sf %>%
-  mutate(in_perimeter = st_within(eshep_full_sf, perimeter_buffer, sparse = FALSE)[ ,1]) %>%
+  mutate(
+    in_perimeter = st_within(eshep_full_sf, perimeter_buffer, sparse = FALSE)[ ,1]) %>%
   filter(in_perimeter == TRUE)
 
-
-# Categorize points by experiment period
-eshep_full_sf <- eshep_full_sf %>%
-  mutate(period = case_when(Time..UTC. <= "2025-07-08 11:59:59" ~ "Tr1",
-                            Time..UTC. >= "2025-07-08 12:00:00" & Time..UTC. <= "2025-07-09 11:59:59" ~ "Tr2",
-                            Time..UTC. >= "2025-07-09 12:00:00" & Time..UTC. <= "2025-07-10 11:59:59" ~ "Tr3",
-                            Time..UTC. >= "2025-07-10 12:00:00" & Time..UTC. <= "2025-07-11 11:59:59" ~ "E1",
-                            Time..UTC. >= "2025-07-11 12:00:00" & Time..UTC. <= "2025-07-12 11:59:59" ~ "W1",
-                            Time..UTC. >= "2025-07-12 12:00:00" & Time..UTC. <= "2025-07-13 11:59:59" ~ "E2",
-                            Time..UTC. >= "2025-07-13 12:00:00" & Time..UTC. <= "2025-07-14 12:00:00" ~ "W2"))
+# Buffers for GPS-error tolerant containment
+# Training VP expanded: lenient for near-boundary points
+# Exclusion zone contracted: lenient for near-boundary points
+training_VPs_buff <- st_buffer(training_VPs, dist = 3)
+exclusion_zones_buff <- st_buffer(exclusion_zones, dist = -3)
 
 
+# Raw training classifications
+training1_inside_raw <- st_within(eshep_full_sf, training_VPs[1, ], sparse = FALSE)[, 1]
+training2_inside_raw <- st_within(eshep_full_sf, training_VPs[2, ], sparse = FALSE)[, 1]
+training3_inside_raw <- st_within(eshep_full_sf, training_VPs[3, ], sparse = FALSE)[, 1]
 
 
-# Training phase
-training1_inside <- st_within(eshep_full_sf, training_VPs[1, ], sparse = FALSE)[, 1]
-training2_inside <- st_within(eshep_full_sf, training_VPs[2, ], sparse = FALSE)[, 1]
-training3_inside <- st_within(eshep_full_sf, training_VPs[3, ], sparse = FALSE)[, 1]
+# Raw exclusion classifications
+west_matrix_raw <- st_within(eshep_full_sf, filter(exclusion_zones, Description == "west"), sparse = FALSE)
+west_ex_inside_raw <- apply(west_matrix_raw, 1, any)
 
-# Exclusion zones
-west_matrix <- st_within(eshep_full_sf, filter(exclusion_zones, Description == "west"), sparse = FALSE)
-west_ex_inside <- apply(west_matrix, 1, any)
+east_matrix_raw <- st_within(eshep_full_sf, filter(exclusion_zones, Description == "east"), sparse = FALSE)
+east_ex_inside_raw <- apply(east_matrix_raw, 1, any)
 
-east_matrix <- st_within(eshep_full_sf, filter(exclusion_zones, Description == "east"), sparse = FALSE)
-east_ex_inside <- apply(east_matrix, 1, any)
+# Buffered training classifications
+training1_inside_buff <- st_within(eshep_full_sf, training_VPs_buff[1, ], sparse = FALSE)[, 1]
+training2_inside_buff <- st_within(eshep_full_sf, training_VPs_buff[2, ], sparse = FALSE)[, 1]
+training3_inside_buff <- st_within(eshep_full_sf, training_VPs_buff[3, ], sparse = FALSE)[, 1]
 
+# Buffered exclusion classifications
+west_matrix_buff <- st_within(eshep_full_sf, filter(exclusion_zones_buff, Description == "west"), sparse = FALSE)
+west_ex_inside_buff <- apply(west_matrix_buff, 1, any)
 
-# Bind the columns
+east_matrix_buff <- st_within(eshep_full_sf, filter(exclusion_zones_buff, Description == "east"), sparse = FALSE)
+east_ex_inside_buff <- apply(east_matrix_buff, 1, any)
+
+# Create full classified data set
 eshep_full_sf_ex <- eshep_full_sf %>%
   mutate(
-    training1_inside = training1_inside,
-    training2_inside = training2_inside,
-    training3_inside = training3_inside,
-    west_ex_inside = west_ex_inside,
-    east_ex_inside = east_ex_inside)
-
-
-eshep_full_sf_ex <- eshep_full_sf_ex %>%
-  mutate(
-    inside_VF = case_when(
-      period == "Tr1" ~ training1_inside,
-      period == "Tr2" ~ training2_inside,
-      period == "Tr3" ~ training3_inside,
-      period %in% c("E1", "E2") ~ !east_ex_inside,
-      period %in% c("W1", "W2") ~ !west_ex_inside,
+    inside_VF_raw = case_when(
+      period == "Tr1" ~ training1_inside_raw,
+      period == "Tr2" ~ training2_inside_raw,
+      period == "Tr3" ~ training3_inside_raw,
+      period %in% c("E1", "E2") ~ !east_ex_inside_raw,
+      period %in% c("W1", "W2") ~ !west_ex_inside_raw,
+      TRUE ~ NA),
+    inside_VF_buff = case_when(
+      period == "Tr1" ~ training1_inside_buff,
+      period == "Tr2" ~ training2_inside_buff,
+      period == "Tr3" ~ training3_inside_buff,
+      period %in% c("E1", "E2") ~ !east_ex_inside_buff,
+      period %in% c("W1", "W2") ~ !west_ex_inside_buff,
       TRUE ~ NA))
 
 
-# Calculate proportion of points inside VF for each animal and convert to df
-m2_df <- eshep_full_sf_ex %>%
+# Buffered containment summary
+m2_df_buff <- eshep_full_sf_ex %>%
+  st_drop_geometry() %>%
   group_by(Animal_ID, TRT, Group, period) %>%
   summarise(
-    n_pts = n(),
-    n_in = sum(inside_VF, na.rm = TRUE),
+    n_pts = sum(!is.na(inside_VF_buff)),
+    n_in = sum(inside_VF_buff, na.rm = TRUE),
     prop_in = n_in / n_pts,
-    .groups = "drop"
-  ) %>%
-  as.data.frame() %>%
-  select(!last_col())
+    .groups = "drop")
+
+# Raw containment summary
+m2_df_raw <- eshep_full_sf_ex %>%
+  st_drop_geometry() %>%
+  group_by(Animal_ID, TRT, Group, period) %>%
+  summarise(
+    n_pts = sum(!is.na(inside_VF_raw)),
+    n_in = sum(inside_VF_raw, na.rm = TRUE),
+    prop_in = n_in / n_pts,
+    .groups = "drop")
 
 
 
 # Fit binomial GLMM
-
-# Data is aggregated by period
-m2 <- glmmTMB(
-  cbind(n_in, n_pts - n_in) ~ TRT + (1|Group) + (1|Animal_ID), 
+# Animal_ID random effect was removed because it caused model singularity. Random effect estimate for animal_ID was 2.462e-34
+m2_buff <- glmmTMB(
+  cbind(n_in, n_pts - n_in) ~ TRT + (1|Group) + (1|period), 
   family = binomial,
-  data = m2_df)
+  data = m2_df_buff)
 
-summary(m2)
+summary(m2_buff)
 
 
-# Save emmeans output
-emm2 <- emmeans(m2, pairwise ~ TRT, type = "response")
+# gives probability inside
+emmeans(m2_buff, pairwise ~ TRT, type = "response")
 
-# View emmeans results
-emm2
+
+
+# Fit binomial GLMM
+# Animal_ID random effect was removed because it caused model singularity. Random effect estimate for animal_ID was 2.462e-34
+m2_raw <- glmmTMB(
+  cbind(n_in, n_pts - n_in) ~ TRT + (1|Group) + (1|period), 
+  family = binomial,
+  data = m2_df_raw)
+
+summary(m2_raw)
+
+
+# gives probability inside
+emmeans(m2_raw, pairwise ~ TRT, type = "response")
+
+
+
+
 
 
 
@@ -244,6 +299,23 @@ plot(sim_res)                               # uniformity, QQ, residuals vs fitte
 testUniformity(sim_res)
 testDispersion(sim_res)                     # over/under-dispersion
 testZeroInflation(sim_res)                  # usually not an issue for binomial, but quick to check
+
+
+
+
+
+
+
+
+
+
+sim_res <- simulateResiduals(m2, n = 1000)  # parametric sims
+plot(sim_res)                               # uniformity, QQ, residuals vs fitted
+testUniformity(sim_res)
+testDispersion(sim_res)                     # over/under-dispersion
+testZeroInflation(sim_res)                  # usually not an issue for binomial, but quick to check
+
+
 
 
 
@@ -1289,6 +1361,11 @@ surv_data <- groups %>%
     reentered = ifelse(is.na(reentered), 0, reentered),
     time_to_reentry = ifelse(is.na(time_to_reentry), 1229, time_to_reentry))
 
+surv_data <- surv_data %>%
+  group_by(Animal_ID) %>%
+  slice_min(time_to_reentry, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
 
 
 ## Survivor model is appropriate since there is not definitive time cut-off
@@ -1344,7 +1421,7 @@ survivor_plot <- ggplot(km_df, aes(x = hours, y = 1 - surv, color = Treatment)) 
   geom_line(size = 1.2, alpha = 0.8) +
   scale_y_continuous(
     name = "Proportion of Animals Re-entered",
-    limits = c(0, .75),
+    limits = c(0, .5),
     expand = c(0, 0)) +
   scale_x_continuous(
     name = "Hours since VF deactivation",
@@ -1424,7 +1501,7 @@ Training_parms <- Full_results %>%
       `Model Parameter`,
       levels = c("A", "r", "t50",
                  "Period slope for A", "Period slope for r", "Period slope for t50"),
-      labels = c("A LSMean", "r LSMean", "t50 LSMean",
+      labels = c("A EMM", "r EMM", "t50 EMM",
                  "Period slope of A", "Period slope of r", "Period slope of t50")
     ),
     `Treatment Group` = factor(`Treatment Group`, levels = c("CNT", "TRT")),
@@ -1538,9 +1615,9 @@ Training_resp_parms <- Full_results %>%
   left_join(sig_lookup2, by = c("Period")) %>%
   mutate(
     Label = case_when(Period == "NA" ~ "Period Slope",
-                      Period == "1" ~ "Period 1 LSMean",
-                      Period == "2" ~ "Period 2 LSMean",
-                      Period == "3" ~ "Period 3 LSMean"),
+                      Period == "1" ~ "Period 1 EMM",
+                      Period == "2" ~ "Period 2 EMM",
+                      Period == "3" ~ "Period 3 EMM"),
     `Treatment Group` = factor(`Treatment Group`, levels = c("CNT", "TRT")),
     lower = Estimate - 1.96 * `Standard Error`,
     upper = Estimate + 1.96 * `Standard Error`)
@@ -1617,7 +1694,7 @@ ggsave(filename = "training_plot2_sig.png",
        path = "C:/Users/Sebastian/Documents/R/Virtual_Fence/Results",
        dpi = 600,
        width = 7,
-       height = 3,
+       height = 2.7,
        units = "in")
 
 
@@ -1667,7 +1744,7 @@ EZT_parms <- Full_results %>%
       `Model Parameter`,
       levels = c("A", "r", "t50",
                  "Period slope for A", "Period slope for r", "Period slope for t50"),
-      labels = c("A LSMean", "r LSMean", "t50 LSMean",
+      labels = c("A EMM", "r EMM", "t50 EMM",
                  "Period slope of A", "Period slope of r", "Period slope of t50")
     ),
     `Treatment Group` = factor(`Treatment Group`, levels = c("CNT", "TRT")),
