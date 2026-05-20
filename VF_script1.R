@@ -261,9 +261,8 @@ m2_df_raw <- eshep_full_sf_ex %>%
 
 
 # Fit binomial GLMM
-# Animal_ID random effect was removed because it caused model singularity. Random effect estimate for animal_ID was 2.462e-34
 m2_buff <- glmmTMB(
-  cbind(n_in, n_pts - n_in) ~ TRT + (1|Group) + (1|period), 
+  cbind(n_in, n_pts - n_in) ~ TRT + (1|Group) + (1|Animal_ID), 
   family = binomial,
   data = m2_df_buff)
 
@@ -276,9 +275,8 @@ emmeans(m2_buff, pairwise ~ TRT, type = "response")
 
 
 # Fit binomial GLMM
-# Animal_ID random effect was removed because it caused model singularity. Random effect estimate for animal_ID was 2.462e-34
 m2_raw <- glmmTMB(
-  cbind(n_in, n_pts - n_in) ~ TRT + (1|Group) + (1|period), 
+  cbind(n_in, n_pts - n_in) ~ TRT + (1|Group) + (1|Animal_ID), 
   family = binomial,
   data = m2_df_raw)
 
@@ -1507,7 +1505,9 @@ Training_parms <- Full_results %>%
     `Treatment Group` = factor(`Treatment Group`, levels = c("CNT", "TRT")),
     lower = Estimate - 1.96 * `Standard Error`,
     upper = Estimate + 1.96 * `Standard Error`
-  )
+  ) %>%
+  filter(!`Model Parameter` %in% c("r EMM", "Period slope of r"))
+
 
 sig_labels <- Training_parms %>%
   group_by(`Response Variable`, `Model Parameter`) %>%
@@ -1519,6 +1519,12 @@ sig_labels <- Training_parms %>%
   filter(sig != "")
 
 
+zero_line_df <- expand.grid(
+  `Response Variable` = levels(Training_parms$`Response Variable`),
+  `Model Parameter` = c("Period slope of A", "Period slope of t50")
+)
+
+
 
 training_plot1 <- ggplot(
   Training_parms,
@@ -1528,6 +1534,14 @@ training_plot1 <- ggplot(
     color = `Treatment Group`
   )
 ) +
+  geom_vline(
+    data = zero_line_df,
+    aes(xintercept = 0),
+    linetype = "dotted",
+    color = "grey40",
+    linewidth = 0.7,
+    inherit.aes = FALSE
+  ) +
   geom_errorbar(
     aes(xmin = lower, xmax = upper),
     height = 0.18,
@@ -1579,7 +1593,7 @@ ggsave(filename = "training_plot1_sig.png",
        plot = training_plot1,
        path = "C:/Users/Sebastian/Documents/R/Virtual_Fence/Results",
        dpi = 600,
-       width = 9,
+       width = 8,
        height = 4.5,
        units = "in")
 
@@ -1635,6 +1649,12 @@ sig_labels2 <- Training_resp_parms %>%
 
 
 
+zero_line_df_2 <- expand.grid(
+  `Response Variable` = "Responsiveness",
+  Label = "Period Slope")
+
+
+
 training_plot2 <- ggplot(
   Training_resp_parms,
   aes(
@@ -1643,6 +1663,14 @@ training_plot2 <- ggplot(
     color = `Treatment Group`
   )
 ) +
+  geom_vline(
+    data = zero_line_df_2,
+    aes(xintercept = 0),
+    linetype = "dotted",
+    color = "grey40",
+    linewidth = 0.7,
+    inherit.aes = FALSE
+  ) +
   geom_errorbar(
     aes(xmin = lower, xmax = upper),
     height = 0.18,
@@ -1693,8 +1721,8 @@ ggsave(filename = "training_plot2_sig.png",
        plot = training_plot2,
        path = "C:/Users/Sebastian/Documents/R/Virtual_Fence/Results",
        dpi = 600,
-       width = 7,
-       height = 2.7,
+       width = 8,
+       height = 2.8,
        units = "in")
 
 
@@ -1750,7 +1778,8 @@ EZT_parms <- Full_results %>%
     `Treatment Group` = factor(`Treatment Group`, levels = c("CNT", "TRT")),
     lower = Estimate - 1.96 * `Standard Error`,
     upper = Estimate + 1.96 * `Standard Error`
-  )
+  ) %>%
+  filter(!`Model Parameter` %in% c("r EMM", "Period slope of r"))
 
 sig_labels3 <- EZT_parms %>%
   group_by(`Response Variable`, `Model Parameter`) %>%
@@ -1763,6 +1792,13 @@ sig_labels3 <- EZT_parms %>%
 
 
 
+zero_line_df_3 <- expand.grid(
+  `Response Variable` = levels(EZT_parms$`Response Variable`),
+  `Model Parameter` = c("Period slope of A", "Period slope of t50")
+)
+
+
+
 EZT_plot <- ggplot(
   EZT_parms,
   aes(
@@ -1771,6 +1807,14 @@ EZT_plot <- ggplot(
     color = `Treatment Group`
   )
 ) +
+  geom_vline(
+    data = zero_line_df_3,
+    aes(xintercept = 0),
+    linetype = "dotted",
+    color = "grey40",
+    linewidth = 0.7,
+    inherit.aes = FALSE
+  ) +
   geom_errorbar(
     aes(xmin = lower, xmax = upper),
     height = 0.18,
@@ -1822,7 +1866,7 @@ ggsave(filename = "EZT_plot_sig.png",
        plot = EZT_plot,
        path = "C:/Users/Sebastian/Documents/R/Virtual_Fence/Results",
        dpi = 600,
-       width = 9,
+       width = 8,
        height = 4.5,
        units = "in")
 
