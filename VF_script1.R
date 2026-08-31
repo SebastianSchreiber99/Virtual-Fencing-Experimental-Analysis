@@ -5,12 +5,12 @@ packages_to_load <- c("tidyverse", "glmmTMB", "emmeans", "ggplot2", "sf", "terra
 lapply(packages_to_load, library, character.only = TRUE)
 
 
-##-----------------------------VF Efficacy-----------------------------
+##-----------------------------VF Escapes and Effectiveness-----------------------------
 
 #-----Escapes - GLMM----
-groups <- read.csv("C:/Users/spsch/Documents/R/Virtual_Fence/Raw Data/Groups.csv")
+groups <- read.csv("C:/Users/Sebastian/Documents/R/Virtual_Fence/Raw Data/Groups.csv")
 
-esc <- read.csv(file = "C:/Users/spsch/Documents/R/Virtual_Fence/Working Data/Escapes2.csv")
+esc <- read.csv(file = "C:/Users/Sebastian/Documents/R/Virtual_Fence/Working Data/Escapes2.csv")
 
 
 # We need to include zeros to give the model the information that escapes did not occur under those conditions. If you only analyze rows where an escape happened, the model thinks missing combinations are “unknown,” not “zero,” which (1) throws away most of your data, (2) inflates uncertainty, and (3) can easily lead to a non‑significant result even when the raw counts suggest a real difference.
@@ -42,7 +42,7 @@ esc_summary_df <- full_grid_esc %>%
 # Fit Poisson GLMM
 # An offset is not needed because all animals have the same rate of exposure to potential escapes
 m1 <- glmmTMB(
-  Total_escapes ~ Escape_Type + (1|Group),
+  Total_escapes ~ Escape_Type + (1|Group) + (1|Animal_ID),
   family = poisson,
   data = esc_summary_df)
 
@@ -53,8 +53,14 @@ emmeans(m1, pairwise ~ Escape_Type, type = "response")
 
 
 # Model Validation
-sim_res <- simulateResiduals(m1, n = 1000)
-testDispersion(sim_res)
+
+sim_res <- simulateResiduals(m1, n = 1000)  # parametric sims
+plot(sim_res)                               # uniformity, QQ, residuals vs fitted
+testUniformity(sim_res)
+testDispersion(sim_res)                     # over/under-dispersion
+testZeroInflation(sim_res)
+
+
 
 
 #-----Escapes - Bar plot-----
@@ -97,10 +103,10 @@ p1 <- ggplot(emm_df, aes(x = Escape_Type, y = rate, color = Escape_Type)) +
 
 ggsave(filename = "EscapesLog.png",
        plot = p1,
-       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
+       path = "C:/Users/Sebastian/Documents/R/Virtual_Fence",
        dpi = 600,
-       width = 4,
-       height = 6,
+       width = 3.5,
+       height = 7,
        units = "in")
 
 
@@ -108,10 +114,10 @@ ggsave(filename = "EscapesLog.png",
 
 
 
-#-----Percentage Points In/Out-----
+###-----Effectiveness: Percentage Points In/Out-----
 
-#eshep_df1 <- read.csv(file = "C:/Users/spsch/Documents/R/Virtual_Fence/2025-07-13.csv")
-#eshep_df2 <- read.csv(file = "C:/Users/spsch/Documents/R/Virtual_Fence/2025-07-20.csv")
+#eshep_df1 <- read.csv(file = "C:/Users/Sebastian/Documents/R/Virtual_Fence/2025-07-13.csv")
+#eshep_df2 <- read.csv(file = "C:/Users/Sebastian/Documents/R/Virtual_Fence/2025-07-20.csv")
 
 #eshep_df <- rbind.data.frame(eshep_df1, eshep_df2) %>% # Filter to include only the three training and four testing days
 #  filter(Time..UTC. > "2025-07-07 11:55:00" & Time..UTC. < "2025-07-14 12:05:00")
@@ -120,121 +126,169 @@ ggsave(filename = "EscapesLog.png",
 #  left_join(groups, by = "Neckband.ID") %>%
 #  filter(!is.na(Animal_ID))
 
-#write.csv(eshep_full_df, file = "C:/Users/spsch/Documents/R/Virtual_Fence/eshep_full_df.csv")
+#write.csv(eshep_full_df, file = "C:/Users/Sebastian/Documents/R/Virtual_Fence/eshep_full_df.csv")
 
 
 
 
-#Read in and clean data
-eshep_full_df <- read.csv(file = "C:/Users/spsch/Documents/R/Virtual_Fence/Working Data/eshep_full_df.csv")
+#Read in and clean data-----------------------
 
-exclusion_zones <- st_read(dsn = "C:/Users/spsch/Documents/R/Virtual_Fence/Raw Data/KMLs/Exclusion_Zones.kml")
+# Read in data
+eshep_full_df <- read.csv(
+  "C:/Users/Sebastian/Documents/R/Virtual_Fence/Working Data/eshep_full_df.csv")
 
-training_VPs <- st_read(dsn = "C:/Users/spsch/Documents/R/Virtual_Fence/Raw Data/KMLs/Training VPs.kml")
+exclusion_zones <- st_read(
+  "C:/Users/Sebastian/Documents/R/Virtual_Fence/Raw Data/KMLs/Exclusion_Zones.kml")
+
+training_VPs <- st_read(
+  "C:/Users/Sebastian/Documents/R/Virtual_Fence/Raw Data/KMLs/Training VPs.kml")
+
+perimeter_buffer <- st_read(
+  "C:/Users/Sebastian/Documents/R/Virtual_Fence/Raw Data/KMLs/perimeter_buffer.kml")
+
+# Projected CRS in meters
+target_crs <- 32612
+
+exclusion_zones <- st_transform(exclusion_zones, target_crs)
+training_VPs <- st_transform(training_VPs, target_crs)
+perimeter_buffer <- st_transform(perimeter_buffer, target_crs)
+
+exclusion_zones$Description <- c(
+  "west", "east", "east", "east", "east", "east",
+  "east", "west", "west", "west", "west", "west")
 
 
-
-exclusion_zones$Description <- c("west", "east", "east", "east", "east", "east",
-                                 "east", "west", "west", "west", "west", "west")
-
+# Remove missing GPS fixes
 eshep_full_df_noNA <- eshep_full_df %>%
-  na.omit(latitude) %>%
-  na.omit(longitude)
+  filter(!is.na(latitude), !is.na(longitude))
 
-# Convert df to spatial points object
-eshep_full_sf <- st_as_sf(eshep_full_df_noNA, coords = c("longitude", "latitude"), crs = crs(training_VPs))
+# Convert GPS to sf
+# IMPORTANT: longitude/latitude are EPSG 4326 before transforming
+eshep_full_sf <- st_as_sf(
+  eshep_full_df_noNA,
+  coords = c("longitude", "latitude"),
+  crs = 4326) %>%
+  st_transform(target_crs) %>%
+  mutate(
+    Time..UTC. = ymd_hms(Time..UTC.),
+    period = case_when(
+      Time..UTC. <= ymd_hms("2025-07-08 11:59:59") ~ "Tr1",
+      Time..UTC. <= ymd_hms("2025-07-09 11:59:59") ~ "Tr2",
+      Time..UTC. <= ymd_hms("2025-07-10 11:59:59") ~ "Tr3",
+      Time..UTC. <= ymd_hms("2025-07-11 11:59:59") ~ "E1",
+      Time..UTC. <= ymd_hms("2025-07-12 11:59:59") ~ "W1",
+      Time..UTC. <= ymd_hms("2025-07-13 11:59:59") ~ "E2",
+      Time..UTC. <= ymd_hms("2025-07-14 12:00:00") ~ "W2",
+      TRUE ~ NA_character_))
 
-
-# Clean points outside pasture boundary with slight buffer zone
-perimeter_buffer <- st_read(dsn = "C:/Users/spsch/Documents/R/Virtual_Fence/Raw Data/KMLs/perimeter_buffer.kml")
-
+# Keep only points inside perimeter
 eshep_full_sf <- eshep_full_sf %>%
-  mutate(in_perimeter = st_within(eshep_full_sf, perimeter_buffer, sparse = FALSE)[ ,1]) %>%
+  mutate(
+    in_perimeter = st_within(eshep_full_sf, perimeter_buffer, sparse = FALSE)[ ,1]) %>%
   filter(in_perimeter == TRUE)
 
-
-# Categorize points by experiment period
-eshep_full_sf <- eshep_full_sf %>%
-  mutate(period = 
-           ifelse(Time..UTC. <= "2025-07-08 11:59:59", "Tr1",
-                  ifelse(Time..UTC. >= "2025-07-08 12:00:00" &
-                           Time..UTC. <= "2025-07-09 11:59:59", "Tr2",
-                         ifelse(Time..UTC. >= "2025-07-09 12:00:00" &
-                                  Time..UTC. <= "2025-07-10 11:59:59", "Tr3",
-                                ifelse(Time..UTC. >= "2025-07-10 12:00:00" &
-                                         Time..UTC. <= "2025-07-11 11:59:59", "E1",
-                                       ifelse(Time..UTC. >= "2025-07-11 12:00:00" &
-                                                Time..UTC. <= "2025-07-12 11:59:59", "W1",
-                                              ifelse(Time..UTC. >= "2025-07-12 12:00:00" &
-                                                       Time..UTC. <= "2025-07-13 11:59:59", "E2",
-                                                     ifelse(Time..UTC. >= "2025-07-13 12:00:00" &
-                                                              Time..UTC. <= "2025-07-14 12:00:00", "W2",
-                                                            NA))))))))
+# Buffers for GPS-error tolerant containment
+# Training VP expanded: lenient for near-boundary points
+# Exclusion zone contracted: lenient for near-boundary points
+training_VPs_buff <- st_buffer(training_VPs, dist = 3)
+exclusion_zones_buff <- st_buffer(exclusion_zones, dist = -3)
 
 
+# Raw training classifications
+training1_inside_raw <- st_within(eshep_full_sf, training_VPs[1, ], sparse = FALSE)[, 1]
+training2_inside_raw <- st_within(eshep_full_sf, training_VPs[2, ], sparse = FALSE)[, 1]
+training3_inside_raw <- st_within(eshep_full_sf, training_VPs[3, ], sparse = FALSE)[, 1]
 
 
+# Raw exclusion classifications
+west_matrix_raw <- st_within(eshep_full_sf, filter(exclusion_zones, Description == "west"), sparse = FALSE)
+west_ex_inside_raw <- apply(west_matrix_raw, 1, any)
 
-# Training phase
-training1_inside <- st_within(eshep_full_sf, training_VPs[1, ], sparse = FALSE)[, 1]
-training2_inside <- st_within(eshep_full_sf, training_VPs[2, ], sparse = FALSE)[, 1]
-training3_inside <- st_within(eshep_full_sf, training_VPs[3, ], sparse = FALSE)[, 1]
+east_matrix_raw <- st_within(eshep_full_sf, filter(exclusion_zones, Description == "east"), sparse = FALSE)
+east_ex_inside_raw <- apply(east_matrix_raw, 1, any)
 
-# Exclusion zones
-west_matrix <- st_within(eshep_full_sf, filter(exclusion_zones, Description == "west"), sparse = FALSE)
-west_ex_inside <- apply(west_matrix, 1, any)
+# Buffered training classifications
+training1_inside_buff <- st_within(eshep_full_sf, training_VPs_buff[1, ], sparse = FALSE)[, 1]
+training2_inside_buff <- st_within(eshep_full_sf, training_VPs_buff[2, ], sparse = FALSE)[, 1]
+training3_inside_buff <- st_within(eshep_full_sf, training_VPs_buff[3, ], sparse = FALSE)[, 1]
 
-east_matrix <- st_within(eshep_full_sf, filter(exclusion_zones, Description == "east"), sparse = FALSE)
-east_ex_inside <- apply(east_matrix, 1, any)
+# Buffered exclusion classifications
+west_matrix_buff <- st_within(eshep_full_sf, filter(exclusion_zones_buff, Description == "west"), sparse = FALSE)
+west_ex_inside_buff <- apply(west_matrix_buff, 1, any)
 
+east_matrix_buff <- st_within(eshep_full_sf, filter(exclusion_zones_buff, Description == "east"), sparse = FALSE)
+east_ex_inside_buff <- apply(east_matrix_buff, 1, any)
 
-# Bind the columns
+# Create full classified data set
 eshep_full_sf_ex <- eshep_full_sf %>%
   mutate(
-    training1_inside = training1_inside,
-    training2_inside = training2_inside,
-    training3_inside = training3_inside,
-    west_ex_inside = west_ex_inside,
-    east_ex_inside = east_ex_inside)
-
-
-eshep_full_sf_ex <- eshep_full_sf_ex %>%
-  mutate(
-    inside_VF = case_when(
-      period == "Tr1" ~ training1_inside,
-      period == "Tr2" ~ training2_inside,
-      period == "Tr3" ~ training3_inside,
-      period %in% c("E1", "E2") ~ !east_ex_inside,
-      period %in% c("W1", "W2") ~ !west_ex_inside,
+    inside_VF_raw = case_when(
+      period == "Tr1" ~ training1_inside_raw,
+      period == "Tr2" ~ training2_inside_raw,
+      period == "Tr3" ~ training3_inside_raw,
+      period %in% c("E1", "E2") ~ !east_ex_inside_raw,
+      period %in% c("W1", "W2") ~ !west_ex_inside_raw,
+      TRUE ~ NA),
+    inside_VF_buff = case_when(
+      period == "Tr1" ~ training1_inside_buff,
+      period == "Tr2" ~ training2_inside_buff,
+      period == "Tr3" ~ training3_inside_buff,
+      period %in% c("E1", "E2") ~ !east_ex_inside_buff,
+      period %in% c("W1", "W2") ~ !west_ex_inside_buff,
       TRUE ~ NA))
 
 
-# Calculate proportion of points inside VF for each animal and convert to df
-m2_df <- eshep_full_sf_ex %>%
+# Buffered containment summary
+m2_df_buff <- eshep_full_sf_ex %>%
+  st_drop_geometry() %>%
   group_by(Animal_ID, TRT, Group, period) %>%
   summarise(
-    n_pts = n(),
-    n_in = sum(inside_VF, na.rm = TRUE),
+    n_pts = sum(!is.na(inside_VF_buff)),
+    n_in = sum(inside_VF_buff, na.rm = TRUE),
     prop_in = n_in / n_pts,
-    .groups = "drop"
-  ) %>%
-  as.data.frame() %>%
-  select(!last_col())
+    .groups = "drop")
+
+# Raw containment summary
+m2_df_raw <- eshep_full_sf_ex %>%
+  st_drop_geometry() %>%
+  group_by(Animal_ID, TRT, Group, period) %>%
+  summarise(
+    n_pts = sum(!is.na(inside_VF_raw)),
+    n_in = sum(inside_VF_raw, na.rm = TRUE),
+    prop_in = n_in / n_pts,
+    .groups = "drop")
 
 
 
 # Fit binomial GLMM
-# Animal_ID random effect was removed because it caused model singularity. Random effect estimate for animal_ID was 2.462e-34
-m2 <- glmmTMB(
-  cbind(n_in, n_pts - n_in) ~ TRT + (1|Group) + (1|period), 
+m2_buff <- glmmTMB(
+  cbind(n_in, n_pts - n_in) ~ TRT + (1|Group) + (1|Animal_ID), 
   family = binomial,
-  data = m2_df)
+  data = m2_df_buff)
 
-summary(m2)
+summary(m2_buff)
 
 
 # gives probability inside
-emmeans(m2, pairwise ~ TRT, type = "response")
+emmeans(m2_buff, pairwise ~ TRT, type = "response")
+
+
+
+# Fit binomial GLMM
+m2_raw <- glmmTMB(
+  cbind(n_in, n_pts - n_in) ~ TRT + (1|Group) + (1|Animal_ID), 
+  family = binomial,
+  data = m2_df_raw)
+
+summary(m2_raw)
+
+
+# gives probability inside
+emmeans(m2_raw, pairwise ~ TRT, type = "response")
+
+
+
+
 
 
 
@@ -248,59 +302,75 @@ testZeroInflation(sim_res)                  # usually not an issue for binomial,
 
 
 
-#-----Percent in - Bar Plot-------
-emm_df <- as.data.frame(emm2) %>%
+
+
+
+
+
+sim_res <- simulateResiduals(m2, n = 1000)  # parametric sims
+plot(sim_res)                               # uniformity, QQ, residuals vs fitted
+testUniformity(sim_res)
+testDispersion(sim_res)                     # over/under-dispersion
+testZeroInflation(sim_res)                  # usually not an issue for binomial, but quick to check
+
+
+
+
+
+
+
+#----- Bar Plot-------
+
+emm_df <- as.data.frame(emm2$emmeans) %>%
   mutate(
     SE = SE,
     ymin = asymp.LCL,
-    ymax = asymp.UCL
-  ) %>%
-  mutate(treatment = ifelse(TRT == "CNT", "Control", "Treatment"))
+    ymax = asymp.UCL,
+    treatment = ifelse(TRT == "CNT", "Control", "Treatment"))
 
 
 
 p2 <- ggplot(emm_df, aes(x = treatment, y = prob, fill = treatment)) +
   geom_col(width = 0.6, color = "black") +
   geom_errorbar(aes(ymin = ymin, ymax = ymax), width = 0.2, linetype = "dashed") +
-  
-  # Bracket-style significance annotation
+    # Bracket-style significance annotation
   geom_segment(aes(x = 1, xend = 1, y = 1.0005, yend = 1.005), color = "black") +  # left leg
   geom_segment(aes(x = 2, xend = 2, y = 1.0005, yend = 1.005), color = "black") +  # right leg
   geom_segment(aes(x = 1, xend = 2, y = 1.005, yend = 1.005), color = "black") +   # top line
-  annotate("text", x = 1.5, y = 1.006, label = "*", size = 8) +                   # asterisk
-  
+  annotate("text", x = 1.5, y = 1.006, label = "**", size = 8) +                   # asterisk
   labs(
     x = element_blank(),
     y = "EMM % Points Inside Virtual Boundary",
-    title = "Virtual Fence Effectiveness by Treatment"
-  ) +
+    title = "VF Effectiveness by Treatment") +
   scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
-  coord_cartesian(ylim = c(0.90, 1.004)) +
+  coord_cartesian(ylim = c(0.80, 1.004)) +
   theme_minimal(base_size = 14) +
   theme(
     legend.position = "none",
-    plot.title = element_text(hjust = 0.5)
-  ) +
+    plot.title = element_text(hjust = 0.5)) +
   scale_fill_manual(values = c("forestgreen", "darkorange"))
 
 
 
-ggsave(filename = "Efficacy.png",
+ggsave(filename = "Effectiveness.png",
       plot = p2,
-       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
+       path = "C:/Users/Sebastian/Documents/R/Virtual_Fence",
        dpi = 600,
-       width = 5,
-       height = 5,
+       width = 4,
+       height = 7,
        units = "in")
 
 
 
-#-----------------Rate of Learning by hour-------------------------------
+
+
+
+##-----------------VF Interactions by time-------------------------------
 
 # Remove any points with cues that are not near VF
 
 # Read in shapefile for buffer zones
-buffers <- st_read(dsn = "C:/Users/spsch/Documents/R/Virtual_Fence/Raw Data/KMLs/Buffers.kml")
+buffers <- st_read(dsn = "C:/Users/Sebastian/Documents/R/Virtual_Fence/Raw Data/KMLs/Buffers.kml")
 
 # Only keep points associated with cues
 eshep_cues_sf_ex <- eshep_full_sf_ex %>%
@@ -349,7 +419,8 @@ eshep_cue_df_clean <- eshep_cue_df_clean %>%
     hour = hour(datetime) + minute(datetime) / 60 + second(datetime) / 3600,
     hour = hour - 12,
     hour = if_else(hour < 0, hour + 24, hour),
-    hour_bin = floor(hour)
+    hour_bin = floor(hour),
+    phase = ifelse(period %in% c("Tr1", "Tr2", "Tr3"), "Training", "EZT")
   )
 
 
@@ -363,701 +434,490 @@ full_grid <- expand_grid(
   period = periods,
   hour_bin = hour_bins)
 
+full_grid <- full_grid %>%
+  mutate(phase = ifelse(period %in% c("Tr1", "Tr2", "Tr3"), "Training", "EZT"))
+
 
 # Summarize cue data by animal × period × hour
 cue_summary <- eshep_cue_df_clean %>%
-  group_by(Animal_ID, TRT, Group, period, hour_bin) %>%
+  group_by(Animal_ID, TRT, Group, period, hour_bin, phase) %>%
   summarise(
     total_audios = sum(`No..Audios`, na.rm = TRUE),
     total_pulses = sum(`No..Pulses`, na.rm = TRUE),
     .groups = "drop")
 
 
-# Join with full grid to retain zeroes!!!! Retaining zeros is highly important!!!!!!!!
-hour_summary <- full_grid %>%
-  left_join(cue_summary, by = c("Animal_ID", "TRT", "Group", "period", "hour_bin")) %>%
+# Join with full grid to retain zeroes! Retaining zeros is highly important.
+VF_interaction_summary <- full_grid %>%
+  left_join(cue_summary, by = c("Animal_ID", "TRT", "Group", "period", "hour_bin", "phase")) %>%
   mutate(
     total_audios = replace_na(total_audios, 0),
     total_pulses = replace_na(total_pulses, 0))
 
-
-# Based on Shapiro-Wilk W, and visual histogram analyses, the data is clearly non-normal and strongly skewed, which confirms that a Poisson GLMM is the right modeling approach.
-
-
-# Fit Poisson GLMM
-m3 <- glmmTMB(
-  total_audios ~ hour_bin * TRT + (1|Animal_ID) + (1|Group) + (1|period),
-  family = poisson,
-  data = hour_summary)
-
-summary(m3)
-
-
-emmeans(m3, pairwise ~ TRT, type = "response")
+VF_interaction_summary <- VF_interaction_summary %>%
+  mutate(phase = factor(phase, levels = c("Training", "EZT")),
+         day_in_phase = case_when(
+           period == "Tr1" ~ 1,
+           period == "Tr2" ~ 2,
+           period == "Tr3" ~ 3,
+           period == "E1"  ~ 1,
+           period == "W1"  ~ 2,
+           period == "E2"  ~ 3,
+           period == "W2"  ~ 4),
+    day_in_phase = as.numeric(day_in_phase),
+    hour_bin = as.numeric(hour_bin))
 
 
 
-# Poisson model yielded fixed effect standard errors that were all NaN: This means the model cannot reliably estimate the uncertainty of the coefficients — suggesting complete or quasi-complete separation, overfitting, or rank deficiency.
-# Thus, the variance may far exceed the mean (which is likely with rare pulses), so we went with a negative binomial family.
-m3.1 <- glmmTMB(
-  total_pulses ~ hour_bin * TRT + (1|Animal_ID) + (1|Group) + (1|period),
-  family = nbinom2,
-  data = hour_summary)
+#Statistical Modeling conducted in SAS--------------------------------
 
-summary(m3.1)
+#Models conducted separately for each phase
 
+#VF interactions were modeled cumulatively within each period with a 3-parameter logistic curve (with 24 hour bins as continuous variable).
 
-emmeans(m3.1, pairwise ~ TRT, type = "response")
+#Logistic curve parameters were modeled linearly across periods (with the 3-4 periods acting as continuous variable) with TRT as a fixed effect also.
 
 
+
+
+##------------Responsiveness--------------------------------------------------
 
 
 #Originally audio-shock ratio or the percentage of cues that were audio was modeled. But this is misleading because that percentage has a lower bound of 50%, since animals cannot receive an shock without an audio warning first. Thus, shocks are a subset of audio events, and a better framing of the question is: Given an audio, what’s the probability it was followed by a pulse?
+
 #To model the probability that an audio cue leads to a pulse — i.e., how often a cue escalates from an audio-only warning to an audio+shock correction.
+
 #This is best framed as a conditional probability:
+
 #Given that an audio was delivered, what’s the chance it was followed by a pulse?
+
 #This model uses a binomial response in the form cbind(successes, failures).
-#In this case: Successes = total_pulses: how many audios escalated to a pulse
-#Failures = total_audios - total_pulses: how many audios did not lead to a pulse
+
+#In this case: Successes = total_audios - total_pulses: how many audios did not lead to a pulse
+
+#Failures = total_pulses: how many audios lead to a pulse
+
 #Total trials = total_audios
+
 #The audios are the "trials": they occur first and may or may not escalate.
+
 #The pulses are the "successes": they occur only if the audio was ineffective.
+
 #This model structure treats each hour (or bin) as an opportunity to observe that escalation rate.
 
-m3.2 <- glmmTMB(
-  cbind(total_audios - total_pulses, total_pulses) ~ hour_bin * TRT + 
-    (1|Animal_ID) + (1|Group) + (1|period),
-  family = binomial,
-  data = hour_summary)
-
-summary(m3.2)
-
-emmeans(m3.2, pairwise ~ TRT, type = "response")
-
-
-# Model validation and over dispersion checks
-check_overdispersion(m3)
-check_overdispersion(m3.1)
-check_overdispersion(m3.2)
-
-res3 <- simulateResiduals(fittedModel = m3, n = 1000)
-plot(res3)
-testDispersion(res3)
-
-res3.1 <- simulateResiduals(fittedModel = m3.1, n = 1000)
-plot(res3.1)
-testDispersion(res3.1)
-
-res3.2 <- simulateResiduals(fittedModel = m3.2, n = 1000)
-plot(res3.2)
-testDispersion(res3.2)
-
-# Validation results:
-#m3 and m3.2 look solid. Their dispersion ratios are close to 1, and both performance::check_overdispersion() and DHARMa::testDispersion() agree: no overdispersion detected.
-#m3.1, however, shows strong underdispersion, which likely indicates: Data artifacts (e.g., very sparse response), or overfitting (too many fixed effects or unnecessary complexity).
-
-
-
-#-----------------Rate of Learning - Plots-------------------------------
-cue_summary <- hour_summary %>%
-  pivot_longer(
-    cols = c(total_audios, total_pulses),
-    names_to = "cue_type",
-    values_to = "count"
-  ) %>%
-  mutate(cue_type = recode(cue_type,
-                           total_audios = "Audio",
-                           total_pulses = "Pulse")) %>%
-  group_by(hour_bin, TRT, cue_type) %>%
-  summarise(total_cues = sum(count, na.rm = TRUE), .groups = "drop")%>%
-  mutate(treatment = ifelse(TRT == "TRT", "Treatment", "Control"))
-
-
-hour_labels <- c("12 PM", "4 PM", "8 PM", "12 AM", "4 AM", "8 AM", "12 PM")
-hour_breaks <- seq(0, 24, by = 4)
-
-
-# Plot of number of cues by hour
-p3 <- ggplot(cue_summary, aes(x = hour_bin, y = total_cues,
-                     color = treatment,
-                     linetype = cue_type,
-                     group = interaction(cue_type, treatment))) +
- # geom_point(size = 2) +
-  geom_smooth(method = "loess", se = FALSE, linewidth = 1.2, span = .7) +
-  labs(
-    title = "VF Interactions by Hour (smoothed)",
-    x = "Hour of Period",
-    y = "Cues per Animal per Hour",
-    color = "Treatment",
-    linetype = "Cue Type"
-  ) +
-  scale_color_manual(values = c("Treatment" = "darkorange", "Control" = "forestgreen")) +
-  scale_linetype_manual(values = c("Audio" = "dotted", "Pulse" = "solid")) +
-  scale_x_continuous(
-    breaks = hour_breaks,
-    sec.axis = dup_axis(
-      breaks = hour_breaks,
-      labels = hour_labels,
-      name = "Time of Day")) +
-  theme_minimal(base_size = 14) +
-  theme(plot.title = element_text(hjust = 0.5),
-        legend.title = element_blank())
-
-
-#ggsave(filename = "Cues_by_hour.png",
-#       plot = p3,
-#       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
-#       dpi = 600,
-#       width = 6,
-#       height = 4,
-#       units = "in")
+#Response = cbind(total_audios - total_pulses, total_pulses)
 
 
 
 
-responsiveness_summary <- hour_summary %>%
+#Statistical modeling conducted in SAS--------------------------------
+
+#Models conducted separately for phase 1
+#Insufficient data to fit a model for phase 2
+
+#Responsiveness was modeled linearly by hour and period with TRT as a fixed effect also.
+
+
+
+
+
+
+
+
+#-----------------Audio Plot-------------------------------
+
+# Compile observed data for 1-hr bins
+obs_audio <- VF_interaction_summary %>%
   mutate(
-    # responsiveness = P(no pulse | audio)
-    prob_responsive = if_else(total_audios > 0,
-                              (total_audios - total_pulses) / total_audios,
-                              NA_real_)
-  ) %>%
-  group_by(hour_bin, TRT) %>%
+    study_day = case_when(
+      phase == "Training" & day_in_phase == 1 ~ 1,
+      phase == "Training" & day_in_phase == 2 ~ 2,
+      phase == "Training" & day_in_phase == 3 ~ 3,
+      phase == "EZT"      & day_in_phase == 1 ~ 4,
+      phase == "EZT"      & day_in_phase == 2 ~ 5,
+      phase == "EZT"      & day_in_phase == 3 ~ 6,
+      phase == "EZT"      & day_in_phase == 4 ~ 7),
+    study_hour = (study_day - 1) * 24 + hour_bin,
+    treatment = ifelse(TRT == "TRT", "Treatment", "Control")) %>%
+  group_by(treatment, study_hour) %>%
   summarise(
-    mean_prob = mean(prob_responsive, na.rm = TRUE),
-    se = sd(prob_responsive, na.rm = TRUE) / sqrt(sum(!is.na(prob_responsive))),
-    .groups = "drop"
-  ) %>%
-  mutate(
-    ymin = pmax(0, mean_prob - se),
-    ymax = pmin(1, mean_prob + se),
-    treatment = ifelse(TRT == "TRT", "Treatment", "Control")
-  )
-
-# Map hour bins to time labels
-hour_labels <- c("12 PM", "4 PM", "8 PM", "12 AM", "4 AM", "8 AM", "12 PM")
-hour_breaks <- seq(0, 24, by = 4)
-
-# Responsiveness by hour
-p4 <- ggplot(responsiveness_summary,
-             aes(x = hour_bin, y = mean_prob, color = treatment, group = treatment)) +
-  geom_smooth(method = "loess", se = FALSE, linewidth = 1.2, span = 0.75) +
-  labs(
-    title = "Responsiveness by Hour (smoothed)",
-    x = "Hour of Period",
-    y = "Success Ratio",
-    color = "Treatment"
-  ) +
-  scale_color_manual(values = c("Treatment" = "darkorange", "Control" = "forestgreen")) +
-  scale_y_continuous(limits = c(0, 1)) +
-  scale_x_continuous(
-    breaks = hour_breaks,
-    sec.axis = dup_axis(
-      breaks = hour_breaks,
-      labels = hour_labels,
-      name = "Time of Day"
-    )
-  ) +
-  theme_minimal(base_size = 14) +
-  theme(
-    plot.title = element_text(hjust = 0.5),
-    legend.title = element_blank()
-  )
-
-
-#ggsave(filename = "Responsiveness_hour.png",
-#       plot = p4,
-#       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
-#       dpi = 600,
-#       width = 6,
-#       height = 4,
-#       units = "in")
-
-
-
-
-
-#-----------------Rate of Learning by period-------------------------------
-
-# Create full grid of combinations
-full_grid_periods <- expand_grid(
-  groups,
-  period = periods)
-
-
-# Summarize cue data by animal × period × period
-cue_summary_by_period <- eshep_cue_df_clean %>%
-  group_by(Animal_ID, TRT, Group, period) %>%
-  summarise(
-    total_audios = sum(`No..Audios`, na.rm = TRUE),
-    total_pulses = sum(`No..Pulses`, na.rm = TRUE),
+    obs_mean = mean(total_audios, na.rm = TRUE),
     .groups = "drop")
 
 
-# Join with full grid to retain zeroes!!!! Retaining zeros is highly important!!!!!!!!
-# Also convert periods to numerical days and categorize by phases
-period_summary <- full_grid_periods %>%
-  left_join(cue_summary_by_period, by = c("Animal_ID", "TRT", "Group", "period")) %>%
-  mutate(
-    total_audios = replace_na(total_audios, 0),
-    total_pulses = replace_na(total_pulses, 0)) %>%
-  mutate(total_cues = total_audios + total_pulses) %>%
-  mutate(day = as.numeric(ifelse(period == "Tr1", 1,
-                      ifelse(period == "Tr2", 2,
-                             ifelse(period == "Tr3", 3,
-                                    ifelse(period == "E1", 4,
-                                           ifelse(period == "W1", 5,
-                                                  ifelse(period == "E2", 6,
-                                                         ifelse(period == "W2", 7, NA))))))))) %>%
-  mutate(phase = ifelse(day <= 3, "Training", "Exclusion Zones"))
+day_breaks <- seq(24, 144, by = 24)
+phase_break <- 72
+y_top <- 0.6
 
+time_breaks <- seq(0, max(obs_audio$study_hour, na.rm = TRUE), by = 8)
 
+time_labels <- rep(c("12PM", "8PM", "4AM"),
+                  length.out = length(time_breaks))
 
-# Fit Poisson GLMM
-m3.3 <- glmmTMB(
-  total_audios ~ day * TRT + (1|Animal_ID) + (1|Group),
-  family = poisson,
-  data = period_summary)
-
-summary(m3.3)
-
-emmeans(m3.3, pairwise ~ TRT, type = "response")
-
-
-
-
-m3.4 <- glmmTMB(
-  total_pulses ~ day * TRT + (1|Animal_ID) + (1|Group),
-  family = poisson,
-  data = period_summary)
-
-summary(m3.4)
-
-emmeans(m3.4, pairwise ~ TRT, type = "response")
-
-
-
-
-# Fit binomial GLMM
-m3.5 <- glmmTMB(
-  cbind(total_audios - total_pulses, total_pulses) ~ day * TRT + 
-    (1|Animal_ID) + (1|Group),
-  family = binomial,
-  data = period_summary)
-
-summary(m3.5)
-
-emmeans(m3.5, pairwise ~ TRT, type = "response")
-
-
-
-
-#-----------------Rate of Learning by period - Plots-------------------------------
-
-
-cue_period_long <- period_summary %>%
-  pivot_longer(
-    cols = c(total_audios, total_pulses),
-    names_to = "cue_type",
-    values_to = "count"
-  ) %>%
-  mutate(
-    cue_type = recode(cue_type,
-                      total_audios = "Audio",
-                      total_pulses = "Pulse"))  %>%
-  mutate(treatment = ifelse(TRT == "TRT", "Treatment", "Control"))
-
-cue_period_long$period <- factor(cue_period_long$period,
-                                 levels = c("Tr1", "Tr2", "Tr3", "E1", "W1", "E2", "W2"))
-
-
-
-
-p5 <- ggplot(cue_period_long, aes(x = period, y = count,
-                            color = treatment,
-                            linetype = cue_type,
-                            group = interaction(cue_type, treatment))) +
-  geom_smooth(method = "loess", se = FALSE, linewidth = 1.2, span = 0.4) +
-  labs(
-    title = "VF Interactions by Period (smoothed)",
-    x = "Period (chronological)",
-    y = "Cues per Animal per Period",
-    color = "Treatment",
-    linetype = "Cue Type"
-  ) +
+p_audio_obs <- ggplot(
+  obs_audio,
+  aes(x = study_hour, y = obs_mean, color = treatment)) +
+  geom_point(alpha = 0.35, size = 1.2) +
+  geom_smooth(
+    se = FALSE,
+    linewidth = 1.2,
+    span = 0.16,
+    method = "loess") +
+  geom_vline(xintercept = day_breaks, linetype = "dotted", alpha = 0.4) +
+  geom_vline(xintercept = phase_break, linetype = "solid", linewidth = 0.8) +
+  annotate("text", x = 36, y = y_top, label = "Training") +
+  annotate("text", x = 120, y = y_top, label = "EZT") +
   scale_color_manual(values = c("Treatment" = "darkorange", "Control" = "forestgreen")) +
-  scale_linetype_manual(values = c("Audio" = "dotted", "Pulse" = "solid")) +
+  scale_x_continuous(
+    breaks = c(0, 24, 48, 72, 96, 120, 144),
+    labels = c("Tr1", "Tr2", "Tr3", "E1", "W1", "E2", "W2"),
+    sec.axis = dup_axis(
+      breaks = time_breaks,
+      labels = time_labels,
+      name = element_blank())) +
+  labs(
+    title = "Audios by Treatment Across Time",
+    y = "Audios per Animal per Hour",
+    x = "Period of Study") +
   theme_minimal(base_size = 14) +
   theme(
-    plot.title = element_text(hjust = 0.5),
-    axis.text.x = element_text(angle = 45, hjust = 1),
-    legend.title = element_blank())
-
-
-
-#ggsave(filename = "Cues_by_period.png",
-#       plot = p5,
-#       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
-#       dpi = 600,
-#       width = 6,
-#       height = 4,
-#       units = "in")
-
-
-
-
-
-
-responsiveness_summary2 <- period_summary %>%
-  mutate(
-    prob_responsive = if_else(total_audios > 0,
-                              (total_audios - total_pulses) / total_audios,
-                              NA_real_)) %>%
-  group_by(period, TRT) %>%
-  summarise(
-    mean_prob = mean(prob_responsive, na.rm = TRUE),
-    se = sd(prob_responsive, na.rm = TRUE) / sqrt(sum(!is.na(prob_responsive))),
-    .groups = "drop") %>%
-  mutate(
-    ymin = pmax(0, mean_prob - se),
-    ymax = pmin(1, mean_prob + se)) %>%
-  mutate(treatment = ifelse(TRT == "TRT", "Treatment", "Control"))
-
-responsiveness_summary2$period <- factor(responsiveness_summary2$period,
-                                     levels = c("Tr1", "Tr2", "Tr3", "E1", "W1", "E2", "W2"))
-                                 
-
-
-# Escalation by period
-p6 <- ggplot(responsiveness_summary2, aes(x = period, y = mean_prob, color = treatment, group = treatment)) +
-  geom_smooth(method = "loess", se = FALSE, size = 1.2, span = 0.6) +
-  labs(
-    title = "Responsiveness by Period (smoothed)",
-    x = "Period (Chronological)",
-    y = "Success Ratio",
-    color = "Treatment"
-  ) +
-  scale_color_manual(values = c("Treatment" = "darkorange", "Control" = "forestgreen")) +
-  scale_y_continuous(limits = c(0, 1)) +
-  theme_minimal(base_size = 14) +
-  theme(plot.title = element_text(hjust = 0.5),
-        legend.title = element_blank(),
-        axis.text.x = element_text(angle = 45, hjust = 1))
-
-
-#ggsave(filename = "Responsiveness_period.png",
-#       plot = p6,
-#       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
-#       dpi = 600,
-#       width = 6,
-#       height = 4,
-#       units = "in")
-
-
-
-#-----------------Rate of Learning by phase-------------------------------
-
-phases <- c("1: Training", "2: Exclusion Zone Testing")
-
-# Create full grid of combinations to retain zeros
-full_grid_phase <- expand_grid(
-  groups,
-  phase = phases)
-
-
-# Summarize cue data by animal × period × phase
-cue_summary_by_phase <- eshep_cue_df_clean %>%
-  mutate(phase = ifelse(period %in% c("Tr1", "Tr2", "Tr3"), "1: Training",
-                        ifelse(period %in% c("E1", "E2", "W1", "W2"), "2: Exclusion Zone Testing", NA))) %>%
-  group_by(Animal_ID, TRT, Group, phase) %>%
-  summarise(
-    total_audios = sum(`No..Audios`, na.rm = TRUE),
-    total_pulses = sum(`No..Pulses`, na.rm = TRUE),
-    .groups = "drop")
-
-
-# Join with full grid to retain zeroes!
-phase_summary <- full_grid_phase %>%
-  left_join(cue_summary_by_phase, by = c("Animal_ID", "TRT", "Group", "phase")) %>%
-  mutate(
-    total_audios = replace_na(total_audios, 0),
-    total_pulses = replace_na(total_pulses, 0)) %>%
-  mutate(total_cues = total_audios + total_pulses)
-
-
-
-# Fit Poisson GLMM
-
-#Phase 1
-m3.6 <- glmmTMB(
-  total_audios ~ TRT + (1|Animal_ID) + (1|Group),
-  family = poisson,
-  data = filter(phase_summary, phase == "1: Training"))
-
-summary(m3.6)
-
-emmeans(m3.6, pairwise ~ TRT, type = "response")
-
-
-
-#Phase 2
-m3.6.1 <- glmmTMB(
-  total_audios ~ TRT + (1|Animal_ID) + (1|Group),
-  family = poisson,
-  data = filter(phase_summary, phase == "2: Exclusion Zone Testing"))
-
-summary(m3.6.1)
-
-emmeans(m3.6.1, pairwise ~ TRT, type = "response")
-
-
-
-
-#Phase 1
-m3.7 <- glmmTMB(
-  total_pulses ~ TRT + (1|Animal_ID) + (1|Group),
-  family = poisson,
-  data = filter(phase_summary, phase == "1: Training"))
-
-summary(m3.7)
-
-emmeans(m3.7, pairwise ~ TRT, type = "response")
-
-
-
-#Phase 2
-m3.7.1 <- glmmTMB(
-  total_pulses ~ TRT + (1|Animal_ID) + (1|Group),
-  family = poisson,
-  data = filter(phase_summary, phase == "2: Exclusion Zone Testing"))
-
-summary(m3.7.1)
-
-emmeans(m3.7.1, pairwise ~ TRT, type = "response")
-
-
-
-# Fit binomial GLMM
-
-#Phase 1
-m3.8 <- glmmTMB(
-  cbind(total_audios - total_pulses, total_pulses) ~ TRT + 
-    (1|Animal_ID) + (1|Group),
-  family = binomial,
-  data = filter(phase_summary, phase == "1: Training"))
-
-summary(m3.8)
-
-emmeans(m3.8, pairwise ~ TRT, type = "response")
-
-
-
-#Phase 2
-#Note: this result is misleading because after the first period of phase 2, no treatment animals went near the VF
-# Thus, the this reflects data from only the first exclusion zone trial when animals were initially adapting to the new phase
-m3.8.1 <- glmmTMB(
-  cbind(total_audios - total_pulses, total_pulses) ~ TRT + 
-    (1|Animal_ID), # Group random effect was removed as it caused a model convergence issue (non-positive-definite Hessian matrix)
-  family = binomial,
-  data = filter(phase_summary, phase == "2: Exclusion Zone Testing"))
-
-summary(m3.8.1)
-
-emmeans(m3.8.1, pairwise ~ TRT, type = "response")
-
-
-
-#-----------------Rate of Learning by phase - Plots-------------------------------
-
-# Reshape to long format
-phase_long <- phase_summary %>%
-  pivot_longer(cols = c(total_audios, total_pulses),
-               names_to = "cue_type",
-               values_to = "count") %>%
-  mutate(
-    cue_type = recode(cue_type,
-                      total_audios = "Audios",
-                      total_pulses = "Pulses"),
-    TRT = factor(TRT, levels = c("CNT", "TRT")),
-    phase = factor(phase, levels = c("1: Training", "2: Exclusion Zone Testing")))
-
-# Summarize with mean and 95% CI
-plot_df <- phase_long %>%
-  group_by(phase, TRT, cue_type) %>%
-  summarise(
-    mean_count = mean(count),
-    se = sd(count) / sqrt(n()),
-    .groups = "drop") %>%
-  mutate(
-    ci_lower = mean_count - 1.96 * se,
-    ci_upper = mean_count + 1.96 * se,
-    treatment = ifelse(TRT == "TRT", "Treatment", "Control"))
-
-
-# Plot with error bars
-p7 <- ggplot(plot_df, aes(x = cue_type, y = mean_count, fill = treatment)) +
-  geom_col(position = position_dodge(width = 0.8), width = 0.7, color = "black") +
-  geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper),
-                position = position_dodge(width = 0.8), width = 0.4, linetype = "dashed") +
-  facet_wrap(~ phase) +
-  labs(
-    title = "VF Interactions by Phase",
-    x = "Cue Type",
-    y = "EMM Cues per Animal",
-    fill = "Treatment"
-  ) +
-  scale_fill_manual(values = c("Control" = "forestgreen", "Treatment" = "darkorange")) +
-  theme_minimal(base_size = 14) +
-  theme(
-    strip.text = element_text(face = "bold"),
-    plot.title = element_text(hjust = 0.5),
     legend.title = element_blank(),
-    panel.spacing = unit(2, "lines"))
-
-p7 <- p7 +
-  # Phase 1 - Audio
-  geom_segment(data = data.frame(phase = "1: Training"),
-               aes(x = 0.8, xend = 0.8, y = 10.7, yend = 10.5),
-               inherit.aes = FALSE) +
-  geom_segment(data = data.frame(phase = "1: Training"),
-               aes(x = 1.2, xend = 1.2, y = 10.7, yend = 10.5),
-               inherit.aes = FALSE) +
-  geom_segment(data = data.frame(phase = "1: Training"),
-               aes(x = 0.8, xend = 1.2, y = 10.7, yend = 10.7),
-               inherit.aes = FALSE) +
-  geom_text(data = data.frame(x = 1, y = 10.9, label = "**", phase = "1: Training"),
-            aes(x = x, y = y, label = label), size = 6, inherit.aes = FALSE) +
-  
-  # Phase 1 - Pulses
-  geom_segment(data = data.frame(phase = "1: Training"),
-               aes(x = 1.8, xend = 1.8, y = 10.7, yend = 10.5),
-               inherit.aes = FALSE) +
-  geom_segment(data = data.frame(phase = "1: Training"),
-               aes(x = 2.2, xend = 2.2, y = 10.7, yend = 10.5),
-               inherit.aes = FALSE) +
-  geom_segment(data = data.frame(phase = "1: Training"),
-               aes(x = 1.8, xend = 2.2, y = 10.7, yend = 10.7),
-               inherit.aes = FALSE) +
-  geom_text(data = data.frame(x = 2, y = 10.9, label = "*", phase = "1: Training"),
-            aes(x = x, y = y, label = label), size = 6, inherit.aes = FALSE) +
-  
-  # Phase 2 - Audio
-  geom_segment(data = data.frame(phase = "2: Exclusion Zone Testing"),
-               aes(x = 0.8, xend = 0.8, y = 10.7, yend = 10.5),
-               inherit.aes = FALSE) +
-  geom_segment(data = data.frame(phase = "2: Exclusion Zone Testing"),
-               aes(x = 1.2, xend = 1.2, y = 10.7, yend = 10.5),
-               inherit.aes = FALSE) +
-  geom_segment(data = data.frame(phase = "2: Exclusion Zone Testing"),
-               aes(x = 0.8, xend = 1.2, y = 10.7, yend = 10.7),
-               inherit.aes = FALSE) +
-  geom_text(data = data.frame(x = 1, y = 10.9, label = "NS", phase = "2: Exclusion Zone Testing"),
-            aes(x = x, y = y, label = label), size = 3, inherit.aes = FALSE) +
-  
-  # Phase 2 - Pulses
-  geom_segment(data = data.frame(phase = "2: Exclusion Zone Testing"),
-               aes(x = 1.8, xend = 1.8, y = 10.7, yend = 10.5),
-               inherit.aes = FALSE) +
-  geom_segment(data = data.frame(phase = "2: Exclusion Zone Testing"),
-               aes(x = 2.2, xend = 2.2, y = 10.7, yend = 10.5),
-               inherit.aes = FALSE) +
-  geom_segment(data = data.frame(phase = "2: Exclusion Zone Testing"),
-               aes(x = 1.8, xend = 2.2, y = 10.7, yend = 10.7),
-               inherit.aes = FALSE) +
-  geom_text(data = data.frame(x = 2, y = 10.9, label = "NS", phase = "2: Exclusion Zone Testing"),
-            aes(x = x, y = y, label = label), size = 3, inherit.aes = FALSE)
+    plot.title = element_text(hjust = 0.5))
 
 
-
-
-#ggsave(filename = "Cue_Counts_phase_Error_bar_fixed.png",
-#       plot = p7,
-#       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
-#       dpi = 600,
-#       width = 7,
-#       height = 5,
-#       units = "in")
-
-
-
-
-# Extract estimated probabilities from each model
-emm1.1 <- emmeans(m3.8, ~ TRT, type = "response") %>%
-  as.data.frame() %>%
-  mutate(phase = "1: Training")
-
-emm2.1 <- emmeans(m3.8.1, ~ TRT, type = "response") %>%
-  as.data.frame() %>%
-  mutate(phase = "2: Exclusion Zone Testing")
-
-# Combine into one data frame
-emm_combined <- bind_rows(emm1.1, emm2.1) %>%
-  rename(prob = prob, lower = asymp.LCL, upper = asymp.UCL) %>%
+# 3-hr bins
+obs_audio_3hr <- VF_interaction_summary %>%
   mutate(
-    phase = factor(phase, levels = c("1: Training", "2: Exclusion Zone Testing")),
-    TRT = factor(TRT, levels = c("CNT", "TRT")),
-    treatment = ifelse(TRT == "TRT", "Treatment", "Control"))
+    study_day = case_when(
+      phase == "Training" & day_in_phase == 1 ~ 1,
+      phase == "Training" & day_in_phase == 2 ~ 2,
+      phase == "Training" & day_in_phase == 3 ~ 3,
+      phase == "EZT"      & day_in_phase == 1 ~ 4,
+      phase == "EZT"      & day_in_phase == 2 ~ 5,
+      phase == "EZT"      & day_in_phase == 3 ~ 6,
+      phase == "EZT"      & day_in_phase == 4 ~ 7),
+    study_hour = (study_day - 1) * 24 + hour_bin,
+    treatment = ifelse(TRT == "TRT", "Treatment", "Control")) %>%
+  mutate(hour_bin_3 = floor(hour_bin / 3) * 3,
+         study_hour_3 = (study_day - 1) * 24 + hour_bin_3) %>%
+  group_by(treatment, phase, day_in_phase, study_day, study_hour_3) %>%
+  summarise(
+    mean_audio = mean(total_audios, na.rm = TRUE),
+    .groups = "drop")
 
 
-# Plot the estimated probabilities with error bars
-# Note: this plot is misleading because after the first period of phase 2, no treatment animals went near the VF
-# Thus, the right panel of the plot refelcts data from only the first exclusion zone trial when animals were initially adapting to the new phase
-p8 <- ggplot(emm_combined, aes(x = phase, y = prob, fill = treatment)) +
-  geom_col(position = position_dodge(width = 0.7), width = 0.6, color = "black") +
-  geom_errorbar(aes(ymin = lower, ymax = upper),
-                position = position_dodge(width = 0.7), width = 0.2, linetype = "dashed") +
+p_audio_obs_3hr <- ggplot(
+  obs_audio_3hr,
+  aes(x = study_hour_3, y = mean_audio, color = treatment)) +
+  geom_point(alpha = 0.35, size = 1.2) +
+  geom_smooth(
+    se = FALSE,
+    linewidth = 1.2,
+    span = 0.16,
+    method = "loess") +
+  geom_vline(xintercept = day_breaks, linetype = "dotted", alpha = 0.4) +
+  geom_vline(xintercept = phase_break, linetype = "solid", linewidth = 0.8) +
+  annotate("text", x = 36, y = y_top, label = "Training") +
+  annotate("text", x = 120, y = y_top, label = "EZT") +
+  scale_color_manual(values = c("Treatment" = "darkorange", "Control" = "forestgreen")) +
+  scale_x_continuous(
+    breaks = c(0, 24, 48, 72, 96, 120, 144),
+    labels = c("Tr1", "Tr2", "Tr3", "E1", "W1", "E2", "W2"),
+    sec.axis = dup_axis(
+      breaks = time_breaks,
+      labels = time_labels,
+      name = element_blank())) +
   labs(
-    title = "Responsiveness by Phase",
-    x = "Phase",
-    y = "EMM Success Ratio",
-    fill = "Treatment"
-  ) +
-  scale_y_continuous(limits = c(0, 1)) +
-  scale_fill_manual(values = c("Control" = "forestgreen", "Treatment" = "darkorange")) +
+    title = "Audios by Treatment Across Time",
+    y = "Audios per Animal per Hour",
+    x = "Period of Study") +
   theme_minimal(base_size = 14) +
   theme(
-    plot.title = element_text(hjust = 0.5),
-    legend.title = element_blank())
+    legend.title = element_blank(),
+    plot.title = element_text(hjust = 0.5))
 
 
-p8 <- p8 +
-  # Phase 1 (non-significant)
-  geom_segment(aes(x = 1 - 0.2, xend = 1 - 0.2, y = 1.05, yend = 1), inherit.aes = FALSE) +  # left leg
-  geom_segment(aes(x = 1 + 0.2, xend = 1 + 0.2, y = 1.05, yend = 1), inherit.aes = FALSE) +  # right leg
-  geom_segment(aes(x = 1 - 0.2, xend = 1 + 0.2, y = 1.05, yend = 1.05), inherit.aes = FALSE) +  # top bar
-  annotate("text", x = 1, y = 1.08, label = "NS", size = 4) +
-  
-  # Phase 2 (significant)
-  geom_segment(aes(x = 2 - 0.2, xend = 2 - 0.2, y = 1.05, yend = 1), inherit.aes = FALSE) +  # left leg
-  geom_segment(aes(x = 2 + 0.2, xend = 2 + 0.2, y = 1.05, yend = 1), inherit.aes = FALSE) +  # right leg
-  geom_segment(aes(x = 2 - 0.2, xend = 2 + 0.2, y = 1.05, yend = 1.05), inherit.aes = FALSE) +  # top bar
-  annotate("text", x = 2, y = 1.07, label = "**", size = 6) +
-  
-  # Adjust y-axis to prevent clipping
-  scale_y_continuous(limits = c(0, 1.1), breaks = c(0, 0.2, 0.4, 0.6, 0.8, 1.0))
-
-
-
-#ggsave(filename = "Responsiveness_phase.png",
-#       plot = p8,
-#       path = "C:/Users/spsch/Documents/R/Virtual_Fence/Results",
+#ggsave(filename = "audio_3hr.png",
+#       plot = p_audio_obs_3hr,
+#      path = "C:/Users/Sebastian/Documents/R/Virtual_Fence",
 #       dpi = 600,
-#       width = 6,
-#       height = 5,
+#       width = 12,
+#       height = 3,
+#       units = "in")
+
+
+#-----------------Pulse Plot-------------------------------
+
+# Compile observed data for 1-hr bins
+obs_pulse <- VF_interaction_summary %>%
+  mutate(
+    study_day = case_when(
+      phase == "Training" & day_in_phase == 1 ~ 1,
+      phase == "Training" & day_in_phase == 2 ~ 2,
+      phase == "Training" & day_in_phase == 3 ~ 3,
+      phase == "EZT"      & day_in_phase == 1 ~ 4,
+      phase == "EZT"      & day_in_phase == 2 ~ 5,
+      phase == "EZT"      & day_in_phase == 3 ~ 6,
+      phase == "EZT"      & day_in_phase == 4 ~ 7),
+    study_hour = (study_day - 1) * 24 + hour_bin,
+    treatment = ifelse(TRT == "TRT", "Treatment", "Control")) %>%
+  group_by(treatment, study_hour) %>%
+  summarise(
+    obs_mean = mean(total_pulses, na.rm = TRUE),
+    .groups = "drop")
+
+
+day_breaks <- seq(24, 144, by = 24)
+phase_break <- 72
+y_top <- 0.32
+
+time_breaks <- seq(0, max(obs_audio$study_hour, na.rm = TRUE), by = 8)
+
+time_labels <- rep(c("12PM", "8PM", "4AM"),
+                   length.out = length(time_breaks))
+
+p_pulse_obs <- ggplot(
+  obs_pulse,
+  aes(x = study_hour, y = obs_mean, color = treatment)) +
+  geom_point(alpha = 0.35, size = 1.2) +
+  geom_smooth(
+    se = FALSE,
+    linewidth = 1.2,
+    span = 0.16,
+    method = "loess") +
+  geom_vline(xintercept = day_breaks, linetype = "dotted", alpha = 0.4) +
+  geom_vline(xintercept = phase_break, linetype = "solid", linewidth = 0.8) +
+  annotate("text", x = 36, y = y_top, label = "Training") +
+  annotate("text", x = 120, y = y_top, label = "EZT") +
+  scale_color_manual(values = c("Treatment" = "darkorange", "Control" = "forestgreen")) +
+  scale_x_continuous(
+    breaks = c(0, 24, 48, 72, 96, 120, 144),
+    labels = c("Tr1", "Tr2", "Tr3", "E1", "W1", "E2", "W2"),
+    sec.axis = dup_axis(
+      breaks = time_breaks,
+      labels = time_labels,
+      name = element_blank())) +
+  labs(
+    title = "Pulses by Treatment Across Time",
+    y = "Pulses per Animal per Hour",
+    x = "Period of Study") +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.title = element_blank(),
+    plot.title = element_text(hjust = 0.5))
+
+
+# 3-hr bins
+obs_pulses_3hr <- VF_interaction_summary %>%
+  mutate(
+    study_day = case_when(
+      phase == "Training" & day_in_phase == 1 ~ 1,
+      phase == "Training" & day_in_phase == 2 ~ 2,
+      phase == "Training" & day_in_phase == 3 ~ 3,
+      phase == "EZT"      & day_in_phase == 1 ~ 4,
+      phase == "EZT"      & day_in_phase == 2 ~ 5,
+      phase == "EZT"      & day_in_phase == 3 ~ 6,
+      phase == "EZT"      & day_in_phase == 4 ~ 7),
+    study_hour = (study_day - 1) * 24 + hour_bin,
+    treatment = ifelse(TRT == "TRT", "Treatment", "Control")) %>%
+  mutate(hour_bin_3 = floor(hour_bin / 3) * 3,
+         study_hour_3 = (study_day - 1) * 24 + hour_bin_3) %>%
+  group_by(treatment, phase, day_in_phase, study_day, study_hour_3) %>%
+  summarise(
+    mean_pulses = mean(total_pulses, na.rm = TRUE),
+    .groups = "drop")
+
+
+p_pulse_obs_3hr <- ggplot(
+  obs_pulses_3hr,
+  aes(x = study_hour_3, y = mean_pulses, color = treatment)) +
+  geom_point(alpha = 0.35, size = 1.2) +
+  geom_smooth(
+    se = FALSE,
+    linewidth = 1.2,
+    span = 0.16,
+    method = "loess") +
+  geom_vline(xintercept = day_breaks, linetype = "dotted", alpha = 0.4) +
+  geom_vline(xintercept = phase_break, linetype = "solid", linewidth = 0.8) +
+  annotate("text", x = 36, y = 0.2, label = "Training") +
+  annotate("text", x = 120, y = 0.2, label = "EZT") +
+  scale_color_manual(values = c("Treatment" = "darkorange", "Control" = "forestgreen")) +
+  scale_x_continuous(
+    breaks = c(0, 24, 48, 72, 96, 120, 144),
+    labels = c("Tr1", "Tr2", "Tr3", "E1", "W1", "E2", "W2"),
+    sec.axis = dup_axis(
+      breaks = time_breaks,
+      labels = time_labels,
+      name = element_blank())) +
+  labs(
+    title = "Pulses by Treatment Across Time",
+    y = "Pulses per Animal per Hour",
+    x = "Period of Study") +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.title = element_blank(),
+    plot.title = element_text(hjust = 0.5))
+
+
+#ggsave(filename = "pulse_3hr.png",
+#       plot = p_pulse_obs_3hr,
+#       path = "C:/Users/Sebastian/Documents/R/Virtual_Fence",
+#       dpi = 600,
+#       width = 12,
+#       height = 3,
 #       units = "in")
 
 
 
-###----------------Spatial Analyses-------------------------
+
+#-----------------Responsiveness Plot-------------------------------
+# Compile observed data for 1-hr bins
+obs_resp <- VF_interaction_summary %>%
+  mutate(
+    study_day = case_when(
+      phase == "Training" & day_in_phase == 1 ~ 1,
+      phase == "Training" & day_in_phase == 2 ~ 2,
+      phase == "Training" & day_in_phase == 3 ~ 3,
+      phase == "EZT"      & day_in_phase == 1 ~ 4,
+      phase == "EZT"      & day_in_phase == 2 ~ 5,
+      phase == "EZT"      & day_in_phase == 3 ~ 6,
+      phase == "EZT"      & day_in_phase == 4 ~ 7),
+    study_hour = (study_day - 1) * 24 + hour_bin,
+    treatment = ifelse(TRT == "TRT", "Treatment", "Control"),
+    responsiveness = if_else(
+      total_audios > 0,
+      (total_audios - total_pulses) / total_audios,
+      NA_real_)) %>%
+  group_by(treatment, study_hour) %>%
+  summarise(
+    obs_mean = mean(responsiveness, na.rm = TRUE),
+    .groups = "drop")
+
+day_breaks <- seq(24, 144, by = 24)
+phase_break <- 72
+y_top <- 0.9
+
+time_breaks <- seq(0, max(obs_resp$study_hour, na.rm = TRUE), by = 8)
+
+time_labels <- rep(c("12PM", "8PM", "4AM"),
+                   length.out = length(time_breaks))
+
+p_resp_obs <- ggplot(
+  obs_resp,
+  aes(x = study_hour, y = obs_mean, color = treatment)) +
+  geom_point(alpha = 0.35, size = 1.2) +
+  geom_smooth(
+    se = FALSE,
+    linewidth = 1.2,
+    span = 0.5,
+    method = "loess") +
+  geom_vline(xintercept = day_breaks, linetype = "dotted", alpha = 0.4) +
+  geom_vline(xintercept = phase_break, linetype = "solid", linewidth = 0.8) +
+  annotate("text", x = 36, y = y_top, label = "Training") +
+  annotate("text", x = 120, y = y_top, label = "EZT") +
+  scale_color_manual(values = c("Treatment" = "darkorange", "Control" = "forestgreen")) +
+  scale_y_continuous(
+    limits = c(0, 1.05),
+    labels = scales::percent_format(accuracy = 1)) +
+  scale_x_continuous(
+    breaks = c(0, 24, 48, 72, 96, 120, 144),
+    labels = c("Tr1", "Tr2", "Tr3", "E1", "W1", "E2", "W2"),
+    sec.axis = dup_axis(
+      breaks = time_breaks,
+      labels = time_labels,
+      name = element_blank())) +
+  labs(
+    title = "Responsiveness by Treatment Across Time",
+    y = "Responsivness to Audio Warning",
+    x = "Period of Study") +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.title = element_blank(),
+    plot.title = element_text(hjust = 0.5))
+
+
+
+# Compile observed data for 3-hr bins
+obs_resp_3hr <- VF_interaction_summary %>%
+  mutate(
+    study_day = case_when(
+      phase == "Training" & day_in_phase == 1 ~ 1,
+      phase == "Training" & day_in_phase == 2 ~ 2,
+      phase == "Training" & day_in_phase == 3 ~ 3,
+      phase == "EZT"      & day_in_phase == 1 ~ 4,
+      phase == "EZT"      & day_in_phase == 2 ~ 5,
+      phase == "EZT"      & day_in_phase == 3 ~ 6,
+      phase == "EZT"      & day_in_phase == 4 ~ 7),
+    study_hour = (study_day - 1) * 24 + hour_bin,
+    treatment = ifelse(TRT == "TRT", "Treatment", "Control"),
+    responsiveness = if_else(
+      total_audios > 0,
+      (total_audios - total_pulses) / total_audios,
+      NA_real_),
+    hour_bin_3 = floor(hour_bin / 3) * 3,
+    study_hour_3 = (study_day - 1) * 24 + hour_bin_3) %>%
+  group_by(treatment, phase, day_in_phase, study_day, study_hour_3) %>%
+  summarise(
+    mean_resp = mean(responsiveness, na.rm = TRUE),
+    .groups = "drop")
+
+p_resp_obs_3hr <- ggplot(
+  obs_resp_3hr,
+  aes(x = study_hour_3, y = mean_resp, color = treatment)) +
+  geom_point(alpha = 0.35, size = 1.2) +
+  geom_smooth(
+    se = FALSE,
+    linewidth = 1.2,
+    span = 0.5,
+    method = "loess") +
+  geom_vline(xintercept = day_breaks, linetype = "dotted", alpha = 0.4) +
+  geom_vline(xintercept = phase_break, linetype = "solid", linewidth = 0.8) +
+  annotate("text", x = 36, y = y_top, label = "Training") +
+  annotate("text", x = 120, y = y_top, label = "EZT") +
+  scale_color_manual(values = c("Treatment" = "darkorange", "Control" = "forestgreen")) +
+  scale_y_continuous(
+    limits = c(0, 1.05),
+    labels = scales::percent_format(accuracy = 1)) +
+  scale_x_continuous(
+    breaks = c(0, 24, 48, 72, 96, 120, 144),
+    labels = c("Tr1", "Tr2", "Tr3", "E1", "W1", "E2", "W2"),
+    sec.axis = dup_axis(
+      breaks = time_breaks,
+      labels = time_labels,
+      name = element_blank())) +
+  labs(
+    title = "Responsiveness by Treatment Across Time",
+    y = "Responsivness",
+    x = "Period of Study") +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.title = element_blank(),
+    plot.title = element_text(hjust = 0.5))
+
+
+#ggsave(filename = "responsiveness_time.png",
+#       plot = p_resp_obs,
+#       path = "C:/Users/Sebastian/Documents/R/Virtual_Fence",
+#       dpi = 600,
+#       width = 12.5,
+#       height = 3,
+#       units = "in")
+
+
+
+
+
+
+###----------------Spatial Analyses-------------------------------------------------------------
 
 #---------Training Phase - Proximity to VF------------------
 
 #This is done on training phase only to avoid spatial-visual markers given the possible association between the hay bale and the VF for control groups. Visual cues during the exclusion zone phase function less to show fence location and more to signial which fence is active.
 
 #Read in and clean data
-exclusion_zones <- st_read(dsn = "C:/Users/spsch/Documents/R/Virtual_Fence/Raw Data/KMLs/Exclusion_Zones.kml")
+exclusion_zones <- st_read(dsn = "C:/Users/Sebastian/Documents/R/Virtual_Fence/Raw Data/KMLs/Exclusion_Zones.kml")
 
-fencelines <- st_read(dsn = "C:/Users/spsch/Documents/R/Virtual_Fence/Raw Data/KMLs/Fencelines.kml")
+fencelines <- st_read(dsn = "C:/Users/Sebastian/Documents/R/Virtual_Fence/Raw Data/KMLs/Fencelines.kml")
 
 exclusion_zones$Description <- c("west", "east", "east", "east", "east", "east",
                                  "east", "west", "west", "west", "west", "west")
@@ -1065,51 +925,64 @@ exclusion_zones$Description <- c("west", "east", "east", "east", "east", "east",
 
 # Calculate distance from fence lines for each period
 eshep_distance_sf <- eshep_full_sf %>%
-  mutate(distanceVF1 = st_distance(eshep_full_sf, fencelines[1, ]),
-         distanceVF2 = st_distance(eshep_full_sf, fencelines[2, ]),
-         distanceVF3 = st_distance(eshep_full_sf, fencelines[3, ])) %>%
-  mutate(distance_curr = ifelse(period == "Tr1", distanceVF1,
-                                ifelse(period == "Tr2", distanceVF2,
-                                       ifelse(period == "Tr3", distanceVF3, NA)))) %>%
-  filter(!is.na(distance_curr))
+  mutate(
+    distanceVF1 = as.numeric(st_distance(geometry, fencelines[1, ])[, 1]),
+    distanceVF2 = as.numeric(st_distance(geometry, fencelines[2, ])[, 1]),
+    distanceVF3 = as.numeric(st_distance(geometry, fencelines[3, ])[, 1])
+  ) %>%
+  mutate(
+    distance_curr = case_when(
+      period == "Tr1" ~ distanceVF1,
+      period == "Tr2" ~ distanceVF2,
+      period == "Tr3" ~ distanceVF3,
+      TRUE ~ NA_real_
+    )
+  ) %>%
+  filter(!is.na(distance_curr)) %>%
+  mutate(
+    datetime = ymd_hms(`Time..UTC.`),
+    hour = hour(datetime) +
+      minute(datetime) / 60 +
+      second(datetime) / 3600,
+    hour = hour - 12,
+    hour = if_else(hour < 0, hour + 24, hour),
+    hour_bin = floor(hour))
 
-
-# Add column specifying distance of 10 m
-eshep_10m_df <- eshep_distance_sf %>%
-  as.data.frame() %>%
-  mutate(Within_10m = ifelse(distance_curr <= 10, 1, 0))
-
-
-
-# Redefine all periods to use as random effect later
-periods_tr <- c("Tr1", "Tr2", "Tr3")
-
-# Create full grid of combinations to retain zeros
-full_grid_10m <- expand_grid(
-  groups,
-  period = periods_tr)
-
-
-# Summarize points within 10m by animal × period
-Points_within_10m <- eshep_10m_df %>%
-  group_by(Animal_ID, TRT, Group, period) %>%
+Points_within_10m <- eshep_distance_sf %>%
+  st_drop_geometry() %>%
+  mutate(Within_10m = if_else(distance_curr <= 10, 1L, 0L)) %>%
+  group_by(Animal_ID, TRT, Group, period, hour_bin) %>%
   summarise(
     total_points_in_10m = sum(Within_10m, na.rm = TRUE),
     .groups = "drop")
 
 
+# Redefine all periods to use as random effect later
+periods_tr <- c("Tr1", "Tr2", "Tr3")
+hour_bin <- c(0:23)
+
+# Create full grid of combinations to retain zeros
+full_grid_10m <- expand_grid(
+  groups,
+  hour_bin,
+  period = periods_tr)
+
+
 # Join with full grid to retain zeroes!
 points_within_10m_summary <- full_grid_10m %>%
-  left_join(Points_within_10m, by = c("Animal_ID", "TRT", "Group", "period")) %>%
-  mutate(total_points_in_10m = replace_na(total_points_in_10m, 0))
+  left_join(Points_within_10m, by = c("Animal_ID", "TRT", "Group", "hour_bin", "period")) %>%
+  mutate(total_points_in_10m = replace_na(total_points_in_10m, 0),
+         day = as.numeric(case_when(period == "Tr1" ~ 1,
+                         period == "Tr2" ~ 2,
+                         period == "Tr3" ~ 3)))
 
 
 
 
 # Fit GLMM Poisson
 m4 <- glmmTMB(
-  total_points_in_10m ~ TRT + (1|Animal_ID) + (1|Group) + (1|period),
-  family = poisson,
+  total_points_in_10m ~ TRT * day + TRT * hour_bin + (1|Group/Animal_ID),
+  family = nbinom2,
   data = points_within_10m_summary)
 
 summary(m4)
@@ -1124,61 +997,6 @@ check_overdispersion(m4)
 res4 <- simulateResiduals(fittedModel = m4, n = 1000)
 plot(res4)
 testDispersion(res4)
-
-
-
-#--------- Proximity to VF - Plot ------------------
-
-# Summarize mean and standard error by treatment
-# Summarize mean and 95% confidence interval by treatment
-summary_df <- points_within_10m_summary %>%
-  group_by(TRT) %>%
-  summarise(
-    mean_points = mean(total_points_in_10m),
-    se = sd(total_points_in_10m) / sqrt(n()),
-    n = n()
-  ) %>%
-  mutate(
-    ci_lower = mean_points - 1.96 * se,
-    ci_upper = mean_points + 1.96 * se,
-    treatment = ifelse(TRT == "TRT", "Treatment", "Control"))
-
-
-# Plot
-p9 <- ggplot(summary_df, aes(x = treatment, y = mean_points, fill = treatment)) +
-  geom_col(width = 0.6, color = "black") +
-  geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper), width = 0.2, linetype = "dashed") +
-  labs(
-    title = "Proximity to Virtual Boundary",
-    y = "EMM Points within 10m of VF per Period",
-    x = element_blank()
-  ) +
-  theme_minimal(base_size = 14) +
-  theme(
-    plot.title = element_text(hjust = 0.4),
-    legend.position = "none") +
-  scale_fill_manual(values = c("Control" = "forestgreen", "Treatment" = "darkorange"))
-
-# Plot with significance annotation
-p9 <- p9 +
-  # Left bracket leg
-  geom_segment(aes(x = 1, xend = 1, y = 6.4, yend = 6.2), inherit.aes = FALSE) +
-  # Right bracket leg
-  geom_segment(aes(x = 2, xend = 2, y = 6.4, yend = 6.2), inherit.aes = FALSE) +
-  # Top bracket bar
-  geom_segment(aes(x = 1, xend = 2, y = 6.4, yend = 6.4), inherit.aes = FALSE) +
-  # Significance text
-  annotate("text", x = 1.5, y = 6.5, label = "*", size = 6)
-
-  
-
-ggsave(filename = "Points_within_10m.png",
-       plot = p9,
-       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
-       dpi = 600,
-       width = 5,
-       height = 5,
-       units = "in")
 
 
 
@@ -1228,14 +1046,18 @@ inside_open_ex_points <- inside_open_ex_points %>%
 # Join with full grid to retain zeroes!
 inside_open_ex_points_summary <- full_grid_open_ex %>%
   left_join(inside_open_ex_points, by = c("Animal_ID", "TRT", "Group", "period", "hour_bin")) %>%
-  mutate(total_points_inside_ex = replace_na(total_points_inside_ex, 0))
+  mutate(total_points_inside_ex = replace_na(total_points_inside_ex, 0),
+         day = as.numeric(case_when(period == "E1" ~ 1,
+                                    period == "W1" ~ 2,
+                                    period == "E2" ~ 3,
+                                    period == "W2" ~ 4)))
 
 
 
 # Fit GLMM Poisson
 m5 <- glmmTMB(
-  total_points_inside_ex ~ TRT * hour_bin + (1|Animal_ID) + (1|Group) + (1|period),
-  family = poisson,
+  total_points_inside_ex ~ TRT * day + TRT * hour_bin + (1|Group/Animal_ID),
+  family = nbinom2,
   data = inside_open_ex_points_summary)
 
 summary(m5)
@@ -1253,58 +1075,130 @@ testDispersion(res5)
 
 
 
-#-------Points within "open" hay bale- Plot (Testing Phase)-------
+#--------- Spatial Analyses - Plots ------------------
 
-# Summarize to get average points inside exclusion zone per animal per hour_bin
-plot10_summary <- inside_open_ex_points_summary %>%
-  group_by(TRT, hour_bin) %>%
+#Training phase proximity to VF: 3-hour plot
+
+obs_10m_3hr <- points_within_10m_summary %>%
+  mutate(
+    study_day = day,                       # Tr1 = 1, Tr2 = 2, Tr3 = 3
+    hour_bin_3 = floor(hour_bin / 3) * 3,
+    study_hour_3 = (study_day - 1) * 24 + hour_bin_3,
+    treatment = ifelse(TRT == "TRT", "Treatment", "Control")) %>%
+  group_by(treatment, study_day, study_hour_3) %>%
   summarise(
-    mean_points = mean(total_points_inside_ex, na.rm = TRUE),
-    .groups = "drop") %>%
-  mutate(treatment = ifelse(TRT == "TRT", "Treatment", "Control"))
+    mean_points = mean(total_points_in_10m, na.rm = TRUE),
+    .groups = "drop")
 
+day_breaks_tr <- seq(24, 48, by = 24)
+y_top_tr <- max(obs_10m_3hr$mean_points, na.rm = TRUE) * 1.05
 
-# Map hour bins (0–12) to time labels (12 PM to 12 AM)
-hour_labels <- c("12 PM", "4 PM", "8 PM", "12 AM", "4 AM", "8 AM", "12 PM")
-hour_breaks <- seq(0, 24, by = 4)
+time_breaks_tr <- seq(0, max(obs_10m_3hr$study_hour_3, na.rm = TRUE), by = 8)
+time_labels_tr <- rep(c("12PM", "8PM", "4AM"),
+                      length.out = length(time_breaks_tr))
 
-
-# Plot
-p10 <- ggplot(plot10_summary, aes(x = hour_bin, y = mean_points, color = treatment)) +
-  geom_smooth(method = "loess", se = FALSE, linewidth = 1.2, span = 0.5) +
-  labs(
-    title = "Use of 'Open' Hay Bale (smoothed)",
-    x = "Hour of Period",
-    y = "Points within 'Open' E.Z. per Animal",
-    color = "Treatment"
-  ) +
+p_10m_obs_3hr <- ggplot(
+  obs_10m_3hr,
+  aes(x = study_hour_3, y = mean_points, color = treatment)) +
+  geom_point(alpha = 0.35, size = 1.2) +
+  geom_smooth(
+    se = FALSE,
+    linewidth = 1.2,
+    span = 0.4,
+    method = "loess") +
+  geom_vline(xintercept = day_breaks_tr, linetype = "dotted", alpha = 0.4) +
   scale_color_manual(values = c("Treatment" = "darkorange", "Control" = "forestgreen")) +
   scale_x_continuous(
-    breaks = hour_breaks,
+    breaks = c(0, 24, 48),
+    labels = c("Tr1", "Tr2", "Tr3"),
     sec.axis = dup_axis(
-      breaks = hour_breaks,
-      labels = hour_labels,
-      name = "Time of Day")) +
+      breaks = time_breaks_tr,
+      labels = time_labels_tr,
+      name = NULL)) +
+  coord_cartesian(ylim = c(0, NA)) +
+  labs(
+    title = "Training Phase: Points in Proximity to VF",
+    y = "Points within 10m of VF per Animal per Hour",
+    x = "Period of Study") +
   theme_minimal(base_size = 14) +
   theme(
-    plot.title = element_text(hjust = 0.5),
-    legend.title = element_blank())
+    legend.title = element_blank(),
+    plot.title = element_text(hjust = 0.5))
 
 
 
-ggsave(filename = "Open_hay_bale_use.png",
-       plot = p10,
-       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
-       dpi = 600,
-       width = 6,
-       height = 4,
-       units = "in")
+#ggsave(filename = "Points_in_10m.png",
+#       plot = p_10m_obs_3hr,
+#       path = "C:/Users/Sebastian/Documents/R/Virtual_Fence",
+#       dpi = 600,
+#       width = 6.5,
+#       height = 4,
+#       units = "in")
+
+
+# EZT phase open hay bale use: 3-hour plot
+
+obs_open_3hr <- inside_open_ex_points_summary %>%
+  mutate(
+    study_day = day,                       # E1 = 1, W1 = 2, E2 = 3, W2 = 4
+    hour_bin_3 = floor(hour_bin / 3) * 3,
+    study_hour_3 = (study_day - 1) * 24 + hour_bin_3,
+    treatment = ifelse(TRT == "TRT", "Treatment", "Control")) %>%
+  group_by(treatment, study_day, study_hour_3) %>%
+  summarise(
+    mean_points = mean(total_points_inside_ex, na.rm = TRUE),
+    .groups = "drop")
+
+day_breaks_ex <- seq(24, 72, by = 24)
+y_top_ex <- max(obs_open_3hr$mean_points, na.rm = TRUE) * 1.05
+
+time_breaks_ex <- seq(0, max(obs_open_3hr$study_hour_3, na.rm = TRUE), by = 8)
+time_labels_ex <- rep(c("12PM", "8PM", "4AM"),
+                      length.out = length(time_breaks_ex))
+
+p_open_obs_3hr <- ggplot(
+  obs_open_3hr,
+  aes(x = study_hour_3, y = mean_points, color = treatment)) +
+  geom_point(alpha = 0.35, size = 1.2) +
+  geom_smooth(
+    se = FALSE,
+    linewidth = 1.2,
+    span = 0.4,
+    method = "loess") +
+  geom_vline(xintercept = day_breaks_ex, linetype = "dotted", alpha = 0.4) +
+  scale_color_manual(values = c("Treatment" = "darkorange", "Control" = "forestgreen")) +
+  scale_x_continuous(
+    breaks = c(0, 24, 48, 72),
+    labels = c("E1", "W1", "E2", "W2"),
+    sec.axis = dup_axis(
+      breaks = time_breaks_ex,
+      labels = time_labels_ex,
+      name = NULL)) +
+  coord_cartesian(ylim = c(0, NA)) +
+  labs(
+    title = "EZT Phase: Use of Open Hay Bale",
+    y = "Points inside Open E.Z. per Animal per Hour",
+    x = "Period of Study") +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.title = element_blank(),
+    plot.title = element_text(hjust = 0.5))
+
+
+#ggsave(filename = "Points_in_open_bale.png",
+#       plot = p_open_obs_3hr,
+#       path = "C:/Users/Sebastian/Documents/R/Virtual_Fence",
+#      dpi = 600,
+#       width = 8,
+#       height = 4,
+#       units = "in")
+
 
 
 #-----------------Heatmaps for hay bale use-----------------
 
 # Read and transform spatial layers
-heatmap_shapes <- st_read("C:/Users/spsch/Documents/R/Virtual_Fence/heatmap_shapes.kml") %>%
+heatmap_shapes <- st_read("C:/Users/Sebastian/Documents/R/Virtual_Fence/heatmap_shapes.kml") %>%
   st_transform(32614) %>%
   mutate(pasture = c(1, 2, 3, 4, 5, 6))
 
@@ -1425,7 +1319,7 @@ heatmap_west_cnt <- ggplot(filter(eshep_pts_west, TRT == "CNT"),
 
 #ggsave(filename = "heatmap_east_cnt.png",
 #       plot = heatmap_east_cnt,
-#       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
+#       path = "C:/Users/Sebastian/Documents/R/Virtual_Fence",
 #       dpi = 300,
 #       width = 8,
 #       height = 6,
@@ -1436,7 +1330,7 @@ heatmap_west_cnt <- ggplot(filter(eshep_pts_west, TRT == "CNT"),
 
 #-----------Conditioned Response Extinction--------------------------
 
-extinction <- read.csv(file = "C:/Users/spsch/Documents/R/Virtual_Fence/Raw Data/Extinction.csv")[, 1:5]
+extinction <- read.csv(file = "C:/Users/Sebastian/Documents/R/Virtual_Fence/Raw Data/Extinction.csv")[, 1:5]
 
 groups <- groups %>%
   mutate(TRT = as.character(TRT))
@@ -1464,6 +1358,11 @@ surv_data <- groups %>%
     time_to_reentry = as.numeric(difftime(DateTime, extinction_start, units = "mins")),
     reentered = ifelse(is.na(reentered), 0, reentered),
     time_to_reentry = ifelse(is.na(time_to_reentry), 1229, time_to_reentry))
+
+surv_data <- surv_data %>%
+  group_by(Animal_ID) %>%
+  slice_min(time_to_reentry, n = 1, with_ties = FALSE) %>%
+  ungroup()
 
 
 
@@ -1520,10 +1419,10 @@ survivor_plot <- ggplot(km_df, aes(x = hours, y = 1 - surv, color = Treatment)) 
   geom_line(size = 1.2, alpha = 0.8) +
   scale_y_continuous(
     name = "Proportion of Animals Re-entered",
-    limits = c(0, 1),
+    limits = c(0, .5),
     expand = c(0, 0)) +
   scale_x_continuous(
-    name = "Hours into Phase",
+    name = "Hours since VF deactivation",
     breaks = seq(0, 24, by = 2),
     sec.axis = dup_axis(
       breaks = seq(0, 24, by = 4),  # Choose sensible numeric breaks
@@ -1537,11 +1436,439 @@ survivor_plot <- ggplot(km_df, aes(x = hours, y = 1 - surv, color = Treatment)) 
     plot.title = element_text(hjust = 0.5))
 
 
-#ggsave(filename = "survivor_plot.png",
-#       plot = survivor_plot,
-#       path = "C:/Users/spsch/Documents/R/Virtual_Fence",
-#       dpi = 300,
-#       width = 6,
-#       height = 5,
-#       units = "in")
+ggsave(filename = "survivor_plot.png",
+       plot = survivor_plot,
+       path = "C:/Users/Sebastian/Documents/R/Virtual_Fence",
+       dpi = 300,
+       width = 7,
+       height = 4,
+       units = "in")
+
+
+
+
+
+
+
+
+###-----------------------------SAS Results and Summary Plots---------------------------------------------
+
+Full_results <- readxl::read_xlsx("C:/Users/Sebastian/Documents/R/Virtual_Fence/Results/Combined_Results.xlsx",
+                                  sheet = 1)
+
+#------------Plot 1--------------
+
+sig_lookup <- Full_results %>%
+  dplyr::filter(
+    Phase == "Training",
+    !Period %in% c("1", "2", "3"),
+    `Statistic Type` %in% c("LSMean Contrast", "Slope contrast") 
+  ) %>%
+  mutate(
+    p_clean = str_replace(as.character(`P-value`), "<", ""),
+    p_num = as.numeric(p_clean),
+    sig = case_when(
+      is.na(p_num)  ~ "",
+      p_num < 0.001 ~ "***",
+      p_num < 0.01  ~ "**",
+      p_num < 0.05  ~ "*",
+      TRUE ~ ""
+    )
+  ) %>%
+  dplyr::select(
+    `Response Variable`,
+    `Model Parameter`,
+    `P-value`,
+    sig)
+
+
+Training_parms <- Full_results %>%
+  filter(
+    Phase == "Training",
+    is.na(Period) | !as.character(Period) %in% c("1", "2", "3"),
+    `Statistic Type` %in% c("LSMean", "Slope")
+  ) %>%
+  left_join(sig_lookup, by = c("Response Variable", "Model Parameter")) %>%
+  mutate(
+    `Response Variable` = factor(
+      `Response Variable`,
+      levels = c("Audios", "Pulses", "Points within 10m"),
+      labels = c("Audio", "Pulse", "Within 10m")
+    ),
+    `Model Parameter` = factor(
+      `Model Parameter`,
+      levels = c("A", "r", "t50",
+                 "Period slope for A", "Period slope for r", "Period slope for t50"),
+      labels = c("A EMM", "r EMM", "t50 EMM",
+                 "Period slope of A", "Period slope of r", "Period slope of t50")
+    ),
+    `Treatment Group` = factor(`Treatment Group`, levels = c("CNT", "TRT")),
+    lower = Estimate - 1.96 * `Standard Error`,
+    upper = Estimate + 1.96 * `Standard Error`
+  ) %>%
+  filter(!`Model Parameter` %in% c("r EMM", "Period slope of r"))
+
+
+sig_labels <- Training_parms %>%
+  group_by(`Response Variable`, `Model Parameter`) %>%
+  summarise(
+    sig = first(sig),
+    x = mean(Estimate),
+    .groups = "drop"
+  ) %>%
+  filter(sig != "")
+
+
+zero_line_df <- expand.grid(
+  `Response Variable` = levels(Training_parms$`Response Variable`),
+  `Model Parameter` = c("Period slope of A", "Period slope of t50")
+)
+
+
+
+training_plot1 <- ggplot(
+  Training_parms,
+  aes(
+    x = Estimate,
+    y = `Treatment Group`,
+    color = `Treatment Group`
+  )
+) +
+  geom_vline(
+    data = zero_line_df,
+    aes(xintercept = 0),
+    linetype = "dotted",
+    color = "grey40",
+    linewidth = 0.7,
+    inherit.aes = FALSE
+  ) +
+  geom_errorbar(
+    aes(xmin = lower, xmax = upper),
+    height = 0.18,
+    linewidth = 1
+  ) +
+  geom_point(size = 4) +
+  facet_grid(
+    `Response Variable` ~ `Model Parameter`,
+    scales = "free",
+    switch = "y"
+  ) +
+  scale_color_manual(
+    values = c(
+      "TRT" = "darkorange",
+      "CNT" = "forestgreen"
+    )
+  ) +
+  geom_text(
+    data = sig_labels,
+    aes(
+      x = x,
+      y = 1.5,
+      label = sig
+    ),
+    inherit.aes = FALSE,
+    size = 6,
+    color = "black"
+  ) +
+  labs(
+    x = "Slope estimate ± 95% CI",
+    y = NULL,
+    color = "Treatment",
+    title = "Training Phase Slope Estimates"
+  ) +
+  theme_bw(base_size = 12) +
+  theme(
+    legend.position = "top",
+    strip.text = element_text(face = "bold"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_blank(),
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank()
+  ) 
+
+
+training_plot1
+
+ggsave(filename = "training_plot1_sig.png",
+       plot = training_plot1,
+       path = "C:/Users/Sebastian/Documents/R/Virtual_Fence/Results",
+       dpi = 600,
+       width = 8,
+       height = 4.5,
+       units = "in")
+
+
+#-----------Plot 2-----------
+
+sig_lookup2 <- Full_results %>%
+  dplyr::filter(
+    `Response Variable` == "Responsiveness",
+    `Statistic Type` %in% c("LSMean Contrast", "Period slope contrast")) %>%
+  mutate(
+    p_clean = str_replace(as.character(`P-value`), "<", ""),
+    p_num = as.numeric(p_clean),
+    sig = case_when(
+      is.na(p_num)  ~ "",
+      p_num < 0.001 ~ "***",
+      p_num < 0.01  ~ "**",
+      p_num < 0.05  ~ "*",
+      TRUE ~ ""
+    )
+  ) %>%
+  dplyr::select(
+    `Statistic Type`,
+    Period,
+    `P-value`,
+    sig)
+
+
+Training_resp_parms <- Full_results %>%
+  dplyr::filter(
+      `Response Variable` == "Responsiveness",
+      `Statistic Type` %in% c("Period slope", "LSMean")) %>%
+  left_join(sig_lookup2, by = c("Period")) %>%
+  mutate(
+    Label = case_when(Period == "NA" ~ "Period Slope",
+                      Period == "1" ~ "Period 1 EMM",
+                      Period == "2" ~ "Period 2 EMM",
+                      Period == "3" ~ "Period 3 EMM"),
+    `Treatment Group` = factor(`Treatment Group`, levels = c("CNT", "TRT")),
+    lower = Estimate - 1.96 * `Standard Error`,
+    upper = Estimate + 1.96 * `Standard Error`)
+
+
+
+sig_labels2 <- Training_resp_parms %>%
+  group_by(Label) %>%
+  summarise(
+    sig = first(sig),
+    x = mean(Estimate),
+    .groups = "drop"
+  ) %>%
+  filter(sig != "")
+
+
+
+zero_line_df_2 <- expand.grid(
+  `Response Variable` = "Responsiveness",
+  Label = "Period Slope")
+
+
+
+training_plot2 <- ggplot(
+  Training_resp_parms,
+  aes(
+    x = Estimate,
+    y = `Treatment Group`,
+    color = `Treatment Group`
+  )
+) +
+  geom_vline(
+    data = zero_line_df_2,
+    aes(xintercept = 0),
+    linetype = "dotted",
+    color = "grey40",
+    linewidth = 0.7,
+    inherit.aes = FALSE
+  ) +
+  geom_errorbar(
+    aes(xmin = lower, xmax = upper),
+    height = 0.18,
+    linewidth = 1
+  ) +
+  geom_point(size = 4) +
+  facet_grid(`Response Variable` ~ Label,
+    scales = "free",
+    switch = "y"
+  ) +
+  scale_color_manual(
+    values = c(
+      "TRT" = "darkorange",
+      "CNT" = "forestgreen"
+    )
+  ) +
+  geom_text(
+    data = sig_labels2,
+    aes(
+      x = x,
+      y = 1.5,
+      label = sig
+    ),
+    inherit.aes = FALSE,
+    size = 6,
+    color = "black"
+  ) +
+  labs(
+    x = "Slope estimate ± 95% CI",
+    y = NULL,
+    color = "Treatment",
+    title = "Responsiveness (Training Phase Only)"
+  ) +
+  theme_bw(base_size = 12) +
+  theme(
+    legend.position = "top",
+    strip.text = element_text(face = "bold"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_blank(),
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank()
+  ) 
+
+
+training_plot2
+
+ggsave(filename = "training_plot2_sig.png",
+       plot = training_plot2,
+       path = "C:/Users/Sebastian/Documents/R/Virtual_Fence/Results",
+       dpi = 600,
+       width = 8,
+       height = 2.8,
+       units = "in")
+
+
+
+
+
+#------------Plot 3--------------
+
+sig_lookup3 <- Full_results %>%
+  dplyr::filter(
+    Phase == "EZT",
+    !Period %in% c("1", "2", "3", "4"),
+    `Statistic Type` %in% c("LSMean Contrast", "Slope contrast") 
+  ) %>%
+  mutate(
+    p_clean = str_replace(as.character(`P-value`), "<", ""),
+    p_num = as.numeric(p_clean),
+    sig = case_when(
+      is.na(p_num)  ~ "",
+      p_num < 0.001 ~ "***",
+      p_num < 0.01  ~ "**",
+      p_num < 0.05  ~ "*",
+      TRUE ~ ""
+    )
+  ) %>%
+  dplyr::select(
+    `Response Variable`,
+    `Model Parameter`,
+    `P-value`,
+    sig)
+
+
+EZT_parms <- Full_results %>%
+  filter(
+    Phase == "EZT",
+    is.na(Period) | !as.character(Period) %in% c("1", "2", "3", "4"),
+    `Statistic Type` %in% c("LSMean", "Slope")
+  ) %>%
+  left_join(sig_lookup3, by = c("Response Variable", "Model Parameter")) %>%
+  mutate(
+    `Response Variable` = factor(
+      `Response Variable`,
+      levels = c("Audios", "Pulses", "Points in Open EZ"),
+      labels = c("Audio", "Pulse", "Open Bale")
+    ),
+    `Model Parameter` = factor(
+      `Model Parameter`,
+      levels = c("A", "r", "t50",
+                 "Period slope for A", "Period slope for r", "Period slope for t50"),
+      labels = c("A EMM", "r EMM", "t50 EMM",
+                 "Period slope of A", "Period slope of r", "Period slope of t50")
+    ),
+    `Treatment Group` = factor(`Treatment Group`, levels = c("CNT", "TRT")),
+    lower = Estimate - 1.96 * `Standard Error`,
+    upper = Estimate + 1.96 * `Standard Error`
+  ) %>%
+  filter(!`Model Parameter` %in% c("r EMM", "Period slope of r"))
+
+sig_labels3 <- EZT_parms %>%
+  group_by(`Response Variable`, `Model Parameter`) %>%
+  summarise(
+    sig = first(sig),
+    x = mean(Estimate),
+    .groups = "drop"
+  ) %>%
+  filter(sig != "")
+
+
+
+zero_line_df_3 <- expand.grid(
+  `Response Variable` = levels(EZT_parms$`Response Variable`),
+  `Model Parameter` = c("Period slope of A", "Period slope of t50")
+)
+
+
+
+EZT_plot <- ggplot(
+  EZT_parms,
+  aes(
+    x = Estimate,
+    y = `Treatment Group`,
+    color = `Treatment Group`
+  )
+) +
+  geom_vline(
+    data = zero_line_df_3,
+    aes(xintercept = 0),
+    linetype = "dotted",
+    color = "grey40",
+    linewidth = 0.7,
+    inherit.aes = FALSE
+  ) +
+  geom_errorbar(
+    aes(xmin = lower, xmax = upper),
+    height = 0.18,
+    linewidth = 1
+  ) +
+  geom_point(size = 4) +
+  facet_grid(
+    `Response Variable` ~ `Model Parameter`,
+    scales = "free",
+    switch = "y"
+  ) +
+  scale_color_manual(
+    values = c(
+      "TRT" = "darkorange",
+      "CNT" = "forestgreen"
+    )
+  ) +
+  geom_text(
+    data = sig_labels3,
+    aes(
+      x = x,
+      y = 1.5,
+      label = sig
+    ),
+    inherit.aes = FALSE,
+    size = 6,
+    color = "black"
+  ) +
+  labs(
+    x = "Slope estimate ± 95% CI",
+    y = NULL,
+    color = "Treatment",
+    title = "EZT Phase Estimates"
+  ) +
+  theme_bw(base_size = 12) +
+  theme(
+    legend.position = "top",
+    strip.text = element_text(face = "bold"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_blank(),
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank()
+  ) 
+
+
+EZT_plot
+
+ggsave(filename = "EZT_plot_sig.png",
+       plot = EZT_plot,
+       path = "C:/Users/Sebastian/Documents/R/Virtual_Fence/Results",
+       dpi = 600,
+       width = 8,
+       height = 4.5,
+       units = "in")
+
+
 
